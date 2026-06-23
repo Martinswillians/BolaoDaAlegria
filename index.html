@@ -14,7 +14,7 @@
   import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
   import { getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, onAuthStateChanged, updateProfile } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
   import { getFirestore, collection, doc, setDoc, getDoc, getDocs, updateDoc, arrayUnion, onSnapshot, query, where, serverTimestamp, addDoc } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
-  import { getStorage, ref, uploadString, getDownloadURL } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-storage.js";
+  // Storage removido — comprovantes salvos como base64 no Firestore (evita CORS)
 
   // ─── FIREBASE CONFIG ─────────────────────────────────────────────────────────
   const firebaseConfig = {
@@ -30,7 +30,6 @@
   const app = initializeApp(firebaseConfig);
   const auth = getAuth(app);
   const db = getFirestore(app);
-  const storage = getStorage(app);
 
   // ─── STATE ────────────────────────────────────────────────────────────────────
   let currentUser = null;
@@ -356,13 +355,21 @@
         <div class="lance-placar">${b.team1} ${l.gol1} × ${l.gol2} ${b.team2}</div>
         <div class="lance-status">${l.pago ? '✅ Pago' : '⏳ Aguardando pagamento'}</div>
         ${!l.pago ? `
-        <div class="pix-reminder">Transfira R$ ${b.valorLance?.toFixed(2)} para a chave PIX: <strong>${b.pixKey}</strong></div>
+        <div class="pix-reminder">
+          Transfira <strong>R$ ${b.valorLance?.toFixed(2)}</strong> para a chave PIX:<br>
+          <span class="pix-key" onclick="copyPix('${b.pixKey}')">${b.pixKey} <span style="font-size:11px;color:var(--gold)">📋 copiar</span></span>
+        </div>
         <div class="comprovante-upload">
           <input type="file" id="comp-${l.id}" accept="image/*,application/pdf" onchange="uploadComprovante('${b.id}','${l.id}',this)">
-          <label for="comp-${l.id}" class="btn-upload">📎 Anexar Comprovante</label>
+          <label for="comp-${l.id}" class="btn-upload">📎 Anexar Comprovante e Confirmar Pagamento</label>
+          <div class="upload-hint">Anexar comprovante confirma o pagamento automaticamente</div>
         </div>
-        <button class="btn-pago" onclick="confirmarPagamento('${b.id}','${l.id}')">✅ Confirmar Pagamento</button>
-        ` : `${l.comprovante ? `<a href="${l.comprovante}" target="_blank" class="link-comp">📄 Ver comprovante</a>` : ''}`}
+        <div class="divider-or">— ou —</div>
+        <button class="btn-pago" onclick="confirmarPagamento('${b.id}','${l.id}')">✅ Confirmar Pagamento sem comprovante</button>
+        ` : `
+        <div class="comprovante-pago">
+          ${l.comprovante ? `<button class="btn-ver-comp" onclick="verComprovante('${l.id}')">📄 Ver Comprovante</button>` : '<span style="font-size:12px;color:var(--gray-400)">Pago sem comprovante</span>'}
+        </div>`}
       </div>`).join('')}
       ${myLances.every(l=>l.pago) && myLances.some(l=>!l.concluido) ? `
       <button class="btn-concluir" onclick="concluirApostas('${b.id}')">🏁 Concluir Minhas Apostas</button>` : ''}
@@ -483,24 +490,57 @@
 
   window.uploadComprovante = async (bolaoId, lanceId, input) => {
     const file = input.files[0]; if(!file) return;
+
+    // Limite de 1.5MB antes de comprimir
+    if(file.size > 5 * 1024 * 1024) {
+      toast('Arquivo muito grande. Use imagem menor que 5MB.','error'); return;
+    }
+
     loading(true);
     try {
-      const reader = new FileReader();
-      reader.onload = async (e) => {
-        const base64 = e.target.result;
-        const storageRef = ref(storage, `comprovantes/${bolaoId}/${lanceId}`);
-        await uploadString(storageRef, base64, 'data_url');
-        const url = await getDownloadURL(storageRef);
-        const snap = await getDoc(doc(db,'boloes',bolaoId));
-        const b = snap.data();
-        const lances = (b.lances||[]).map(l => l.id===lanceId ? {...l, comprovante: url} : l);
-        await updateDoc(doc(db,'boloes',bolaoId),{lances});
-        toast('Comprovante enviado! 📎','success');
-        loading(false);
-      };
-      reader.readAsDataURL(file);
-    } catch(e){ toast('Erro ao enviar comprovante','error'); loading(false); }
+      // Comprime a imagem via Canvas antes de salvar no Firestore (sem Storage = sem CORS)
+      const compressedBase64 = await compressImage(file, 800, 0.65);
+
+      const snap = await getDoc(doc(db,'boloes',bolaoId));
+      const b = snap.data();
+      const lances = (b.lances||[]).map(l =>
+        l.id===lanceId ? {...l, comprovante: compressedBase64, pago: true} : l
+      );
+      await updateDoc(doc(db,'boloes',bolaoId),{lances});
+      toast('Comprovante enviado e pagamento confirmado! ✅','success');
+    } catch(e) {
+      console.error(e);
+      toast('Erro ao enviar comprovante: '+e.message,'error');
+    } finally { loading(false); }
   };
+
+  // Comprime imagem via Canvas para caber no Firestore (max ~1MB base64)
+  function compressImage(file, maxWidth, quality) {
+    return new Promise((resolve, reject) => {
+      // PDFs: salvar como base64 direto sem comprimir
+      if(file.type === 'application/pdf') {
+        const reader = new FileReader();
+        reader.onload = e => resolve(e.target.result);
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+        return;
+      }
+      const img = new Image();
+      const url = URL.createObjectURL(file);
+      img.onload = () => {
+        URL.revokeObjectURL(url);
+        const scale = Math.min(1, maxWidth / img.width);
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.round(img.width * scale);
+        canvas.height = Math.round(img.height * scale);
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        resolve(canvas.toDataURL('image/jpeg', quality));
+      };
+      img.onerror = reject;
+      img.src = url;
+    });
+  }
 
   window.concluirApostas = async (bolaoId) => {
     loading(true);
@@ -572,9 +612,35 @@
     } catch(e){toast('Erro ao informar resultado','error');} finally{loading(false);}
   };
 
-  // ─── COPY LINK ────────────────────────────────────────────────────────────────
+  // ─── COPY LINK & PIX ──────────────────────────────────────────────────────────
   window.copyLink = (link) => {
     navigator.clipboard.writeText(link).then(()=>toast('Link copiado! 📋','success'));
+  };
+
+  window.copyPix = (key) => {
+    navigator.clipboard.writeText(key).then(()=>toast('Chave PIX copiada! 📋','success'));
+  };
+
+  // ─── VER COMPROVANTE (lightbox base64) ───────────────────────────────────────
+  window.verComprovante = (lanceId) => {
+    if(!currentBolao) return;
+    const lance = (currentBolao.lances||[]).find(l=>l.id===lanceId);
+    if(!lance?.comprovante) { toast('Comprovante não encontrado','error'); return; }
+
+    // Remove lightbox existente
+    const old = document.getElementById('lightbox-comp');
+    if(old) old.remove();
+
+    const isPdf = lance.comprovante.startsWith('data:application/pdf');
+    const lb = document.createElement('div');
+    lb.id = 'lightbox-comp';
+    lb.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.92);z-index:9998;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:16px;';
+    lb.innerHTML = isPdf
+      ? `<iframe src="${lance.comprovante}" style="width:100%;max-width:500px;height:80vh;border-radius:12px;border:none;"></iframe>`
+      : `<img src="${lance.comprovante}" style="max-width:100%;max-height:80vh;border-radius:12px;object-fit:contain;">`;
+    lb.innerHTML += `<button onclick="document.getElementById('lightbox-comp').remove()"
+      style="margin-top:16px;background:var(--gold);color:#111;border:none;border-radius:10px;padding:10px 28px;font-size:15px;font-weight:700;cursor:pointer;">✕ Fechar</button>`;
+    document.body.appendChild(lb);
   };
 
   // ─── URL BOLÃO INVITE ─────────────────────────────────────────────────────────
@@ -834,7 +900,19 @@
   .pix-reminder { font-size: 12px; color: var(--gold-dark); background: rgba(249,168,37,.1); border-radius: 8px; padding: 8px; margin-bottom: 8px; }
   .comprovante-upload { margin-bottom: 8px; }
   .comprovante-upload input[type=file] { display: none; }
-  .btn-upload { display: inline-block; background: rgba(255,255,255,.08); border: 1px solid var(--border); border-radius: 8px; padding: 7px 12px; font-size: 12px; cursor: pointer; }
+  .btn-upload {
+    display: flex; align-items: center; justify-content: center; gap: 6px;
+    background: rgba(255,214,0,.12); border: 1px dashed var(--gold-dark);
+    border-radius: 10px; padding: 12px 14px; font-size: 13px; font-weight: 600;
+    color: var(--gold-dark); cursor: pointer; width: 100%; text-align: center;
+    transition: background .2s;
+  }
+  .btn-upload:active { background: rgba(255,214,0,.22); }
+  .upload-hint { font-size: 11px; color: var(--gray-400); text-align: center; margin-top: 5px; }
+  .pix-key { display: inline-block; margin-top: 4px; cursor: pointer; font-weight: 700; color: var(--white); font-size: 14px; word-break: break-all; }
+  .divider-or { text-align: center; color: var(--gray-400); font-size: 12px; margin: 8px 0; }
+  .comprovante-pago { margin-top: 6px; }
+  .btn-ver-comp { background: rgba(255,255,255,.08); border: 1px solid var(--border); border-radius: 8px; padding: 8px 14px; font-size: 13px; color: var(--white); cursor: pointer; }
   .btn-pago { background: var(--green-mid); color: #fff; border: none; border-radius: 8px; padding: 9px 14px; font-size: 13px; font-weight: 600; cursor: pointer; width: 100%; }
   .link-comp { font-size: 12px; color: var(--gold); text-decoration: none; }
   .btn-concluir { background: linear-gradient(135deg, var(--gold), var(--gold-dark)); color: var(--dark); border: none; border-radius: 10px; padding: 12px; font-size: 14px; font-weight: 700; cursor: pointer; width: 100%; margin-top: 8px; }
