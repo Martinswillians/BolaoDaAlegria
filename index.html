@@ -146,8 +146,10 @@
         invitedEmails: emails,
         creatorId: currentUser.uid,
         creatorName: currentUser.displayName || currentUser.email,
+        adminId: currentUser.uid,
+        adminName: currentUser.displayName || currentUser.email.split('@')[0],
         createdAt: serverTimestamp(),
-        status: 'open', // open | closed | finished
+        status: 'open',
         participants: [],
         lances: [],
         totalPago: 0,
@@ -260,36 +262,73 @@
     const gd = new Date(b.gameDateTime);
     const now = new Date();
     const diff = gd - now;
-    const minutos = Math.floor(diff/60000);
     const isCreator = b.creatorId === currentUser.uid;
+    const isAdmin = (b.adminId || b.creatorId) === currentUser.uid;
     const lances = b.lances || [];
-    const myLances = lances.filter(l=>l.userId===currentUser.uid);
-    const participants = [...new Set(lances.map(l=>l.userName))];
-    const totalPago = lances.filter(l=>l.pago).reduce((s,l)=>s+(b.valorLance||0),0) + (b.acumulado||0);
-    const totalLances = lances.length;
-    const lancesPageCount = lances.filter(l=>l.pago).length;
 
-    // Deadline: 60 min antes
+    // Participação: user aceitou participar explicitamente
+    const isParticipant = (b.participants||[]).some(p=>p.userId===currentUser.uid);
+    const hasLances = lances.some(l=>l.userId===currentUser.uid);
+    const canSeeContent = isCreator || isParticipant || hasLances;
+
+    const myLances = lances.filter(l=>l.userId===currentUser.uid);
+    const participants = [...new Map(lances.map(l=>[l.userId,{id:l.userId,name:l.userName,email:l.userEmail}])).values()];
+    const lancesPageCount = lances.filter(l=>l.pago && l.comprovante).length;
+    const totalPago = lancesPageCount * (b.valorLance||0) + (b.acumulado||0);
+    const totalLances = lances.length;
+    const totalPagos = lances.filter(l=>l.pago).length;
+
     const deadline = new Date(gd.getTime() - 60*60*1000);
     const apostaEncerrada = now >= deadline || b.status !== 'open';
-    const canBet = !apostaEncerrada;
+    const canBet = !apostaEncerrada && canSeeContent;
+
+    const adminName = b.adminName || b.creatorName || '—';
+    const adminId = b.adminId || b.creatorId;
+
+    // Chave pix do usuário no perfil do bolão
+    const myParticipant = (b.participants||[]).find(p=>p.userId===currentUser.uid);
+    const myPixRecebimento = myParticipant?.pixRecebimento || '';
 
     const el = $('bolao-detail-content');
     if(!el) return;
 
-    // Countdown
-    let countdown = '';
-    if(diff > 0) {
-      const h = Math.floor(diff/3600000);
-      const m = Math.floor((diff%3600000)/60000);
-      countdown = `⏱ ${h}h ${m}min para o jogo`;
-    } else {
-      countdown = '🔴 Jogo em andamento / finalizado';
+    let countdown = diff > 0
+      ? `⏱ ${Math.floor(diff/3600000)}h ${Math.floor((diff%3600000)/60000)}min ${Math.floor((diff%60000)/1000)}s para o jogo`
+      : '🔴 Jogo em andamento / finalizado';
+
+    const link = `${location.origin}${location.pathname}?bolao=${b.id}`;
+
+    // ── TELA DE ENTRADA (não participante) ───────────────────────────────────
+    if(!canSeeContent) {
+      el.innerHTML = `
+      <div class="detail-header">
+        <button class="btn-back" onclick="showView('home')">← Voltar</button>
+        <div class="detail-title">${b.name}</div>
+        <div class="detail-status">${countdown}</div>
+      </div>
+      <div class="vs-hero">
+        <div class="team-hero">${b.team1}</div>
+        <div class="vs-center"><div class="vs-big">VS</div>
+          <div class="game-date">${gd.toLocaleDateString('pt-BR')} • ${gd.toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'})}</div>
+        </div>
+        <div class="team-hero">${b.team2}</div>
+      </div>
+      <div class="join-card">
+        <div class="join-icon">🎟️</div>
+        <div class="join-title">Você foi convidado!</div>
+        <div class="join-desc">Participe do <strong>${b.name}</strong> e faça sua aposta no placar do jogo.</div>
+        <div class="join-info">
+          <span>💰 R$ ${b.valorLance?.toFixed(2)} por lance</span>
+          <span>👑 Organizado por ${b.creatorName}</span>
+        </div>
+        <div class="aviso-comprovante">⚠️ Somente apostas pagas <strong>com comprovante enviado</strong> participam do bolão.</div>
+        <button class="btn-primary btn-join" onclick="participarBolao('${b.id}')">🎟️ Participar do Bolão</button>
+      </div>`;
+      startCountdown(gd, b.id);
+      return;
     }
 
-    // Link de convite
-    const link = `${location.href.split('?')[0]}?bolao=${b.id}`;
-
+    // ── TELA PRINCIPAL ───────────────────────────────────────────────────────
     el.innerHTML = `
     <div class="detail-header">
       <button class="btn-back" onclick="showView('home')">← Voltar</button>
@@ -306,21 +345,45 @@
       <div class="team-hero">${b.team2}</div>
     </div>
 
+    <!-- Admin financeiro banner -->
+    <div class="admin-banner">
+      <span class="admin-icon">💼</span>
+      <div>
+        <div class="admin-label">Administrador Financeiro</div>
+        <div class="admin-name">${adminName}</div>
+      </div>
+      ${isCreator ? `<button class="btn-trocar-admin" onclick="abrirModalAdmin('${b.id}')">Trocar</button>` : ''}
+    </div>
+
     <div class="info-grid">
       <div class="info-card">💰 Valor por lance<br><strong>R$ ${b.valorLance?.toFixed(2)}</strong></div>
-      <div class="info-card">💳 PIX<br><strong>${b.pixKey}</strong></div>
+      <div class="info-card">💳 PIX p/ pagamento<br><strong class="pix-key" onclick="copyPix('${b.pixKey}')">${b.pixKey} 📋</strong></div>
     </div>
 
     <div class="stats-row">
       <div class="stat-box"><span class="stat-num">${participants.length}</span><span class="stat-label">Apostadores</span></div>
       <div class="stat-box"><span class="stat-num">${totalLances}</span><span class="stat-label">Lances</span></div>
-      <div class="stat-box"><span class="stat-num">${lancesPageCount}</span><span class="stat-label">Pagos</span></div>
+      <div class="stat-box"><span class="stat-num">${lancesPageCount}</span><span class="stat-label">Pagos c/ Comp.</span></div>
       <div class="stat-box total-box"><span class="stat-num">R$${totalPago.toFixed(0)}</span><span class="stat-label">Pot Total</span></div>
     </div>
 
     ${b.acumulado > 0 ? `<div class="acumulado-banner">🏆 Acumulado do bolão anterior: R$ ${b.acumulado.toFixed(2)}</div>` : ''}
 
-    ${isCreator && !apostaEncerrada ? `
+    <!-- Aviso comprovante obrigatório -->
+    <div class="aviso-comprovante-inline">⚠️ Somente apostas pagas <strong>com comprovante</strong> participam do sorteio do prêmio.</div>
+
+    <!-- Chave pix recebimento -->
+    <div class="pix-recebimento-section">
+      <div class="section-title" style="font-size:13px">🏦 Sua Chave PIX para receber prêmio</div>
+      <div class="pix-recebimento-row">
+        <input type="text" id="minha-pix" placeholder="CPF, e-mail, telefone..." value="${myPixRecebimento}" class="pix-recebimento-input">
+        <button class="btn-salvar-pix" onclick="salvarPixRecebimento('${b.id}')">Salvar</button>
+      </div>
+      <div class="pix-hint">Esta chave será exibida ao administrador financeiro caso você ganhe.</div>
+    </div>
+
+    <!-- Compartilhar (criador) -->
+    ${isCreator ? `
     <div class="share-section">
       <div class="share-title">📨 Convidar Participantes</div>
       <div class="share-link-box">
@@ -330,6 +393,7 @@
       ${b.invitedEmails?.length ? `<div class="invited-list">Convidados: ${b.invitedEmails.join(', ')}</div>` : ''}
     </div>` : ''}
 
+    <!-- Fazer lance -->
     ${!apostaEncerrada ? `<div class="deadline-info">⏰ Apostas encerram 60 min antes do jogo</div>` : ''}
     ${canBet ? `
     <div class="bet-section">
@@ -347,44 +411,54 @@
       </div>
     </div>` : `<div class="apostaEncerrada">🔒 Apostas encerradas (60 min antes do jogo)</div>`}
 
+    <!-- Meus lances -->
     ${myLances.length > 0 ? `
     <div class="my-lances-section">
       <div class="section-title">Meus Lances</div>
-      ${myLances.map((l,i) => `
-      <div class="my-lance-card ${l.pago?'pago':'pendente'}">
+      ${myLances.map(l => `
+      <div class="my-lance-card ${l.pago && l.comprovante ? 'pago' : l.pago ? 'pago-sem-comp' : 'pendente'}">
         <div class="lance-placar">${b.team1} ${l.gol1} × ${l.gol2} ${b.team2}</div>
-        <div class="lance-status">${l.pago ? '✅ Pago' : '⏳ Aguardando pagamento'}</div>
-        ${!l.pago ? `
+        <div class="lance-status">${l.pago && l.comprovante ? '✅ Pago com comprovante' : l.pago ? '⚠️ Pago sem comprovante' : '⏳ Aguardando pagamento'}</div>
+        ${!l.comprovante ? `
         <div class="pix-reminder">
-          Transfira <strong>R$ ${b.valorLance?.toFixed(2)}</strong> para a chave PIX:<br>
+          Transfira <strong>R$ ${b.valorLance?.toFixed(2)}</strong> para:<br>
           <span class="pix-key" onclick="copyPix('${b.pixKey}')">${b.pixKey} <span style="font-size:11px;color:var(--gold)">📋 copiar</span></span>
         </div>
         <div class="comprovante-upload">
           <input type="file" id="comp-${l.id}" accept="image/*,application/pdf" onchange="uploadComprovante('${b.id}','${l.id}',this)">
           <label for="comp-${l.id}" class="btn-upload">📎 Anexar Comprovante e Confirmar Pagamento</label>
-          <div class="upload-hint">Anexar comprovante confirma o pagamento automaticamente</div>
+          <div class="upload-hint">Comprovante é obrigatório para participar do prêmio</div>
         </div>
-        <div class="divider-or">— ou —</div>
-        <button class="btn-pago" onclick="confirmarPagamento('${b.id}','${l.id}')">✅ Confirmar Pagamento sem comprovante</button>
+        ${!l.pago ? `<div class="divider-or">— ou —</div>
+        <button class="btn-pago-sem" onclick="confirmarPagamento('${b.id}','${l.id}')">Marcar pago sem comprovante</button>` : ''}
         ` : `
         <div class="comprovante-pago">
-          ${l.comprovante ? `<button class="btn-ver-comp" onclick="verComprovante('${l.id}')">📄 Ver Comprovante</button>` : '<span style="font-size:12px;color:var(--gray-400)">Pago sem comprovante</span>'}
+          <button class="btn-ver-comp" onclick="verComprovante('${l.id}')">📄 Ver Comprovante</button>
         </div>`}
       </div>`).join('')}
-      ${myLances.every(l=>l.pago) && myLances.some(l=>!l.concluido) ? `
+      ${myLances.some(l=>l.pago && l.comprovante) && myLances.filter(l=>l.pago && l.comprovante).some(l=>!l.concluido) ? `
       <button class="btn-concluir" onclick="concluirApostas('${b.id}')">🏁 Concluir Minhas Apostas</button>` : ''}
       ${myLances.every(l=>l.concluido) ? '<div class="concluido-msg">✅ Suas apostas estão concluídas!</div>' : ''}
     </div>` : ''}
 
+    <!-- Lances pagos com comprovante — visível a todos -->
+    ${renderLancesPublicos(b)}
+
+    <!-- Participantes -->
     <div class="participants-section">
       <div class="section-title">👥 Participantes (${participants.length})</div>
       ${participants.length===0 ? '<p class="empty-p">Nenhum lance ainda.</p>' :
-        `<div class="participant-list">${participants.map(p=>`<span class="participant-chip">${p}</span>`).join('')}</div>`}
+        `<div class="participant-list">${participants.map(p=>`<span class="participant-chip">${p.name}</span>`).join('')}</div>`}
     </div>
 
+    <!-- Painel do Administrador Financeiro -->
+    ${isAdmin ? renderPainelAdmin(b) : ''}
+
+    <!-- Resultados -->
     ${(b.status==='closed' || b.status==='finished') ? renderResultados(b) : ''}
 
-    ${isCreator && b.status==='closed' ? `
+    <!-- Informar resultado (admin) -->
+    ${isAdmin && b.status==='closed' ? `
     <div class="resultado-section">
       <div class="section-title">🏆 Informar Resultado Final</div>
       <div class="score-input-row">
@@ -398,13 +472,94 @@
     </div>` : ''}
 
     ${isCreator && b.status==='open' ? `
-    <div style="margin-top:16px">
+    <div style="margin:0 16px 24px">
       <button class="btn-danger" onclick="encerrarBolao('${b.id}')">🔒 Encerrar Bolão Manualmente</button>
     </div>` : ''}
     `;
 
-    // Cronômetro regressivo
     startCountdown(gd, b.id);
+  }
+
+  function renderLancesPublicos(b) {
+    const pagosComComp = (b.lances||[]).filter(l=>l.pago && l.comprovante);
+    if(pagosComComp.length === 0) return '';
+    return `
+    <div class="lances-publicos-section">
+      <div class="section-title">📋 Apostas Confirmadas (${pagosComComp.length})</div>
+      <div class="aviso-mini">Somente lances com comprovante enviado estão listados abaixo e participam do prêmio.</div>
+      ${pagosComComp.map(l=>`
+      <div class="lance-pub-row">
+        <span class="lance-pub-nome">${l.userName}</span>
+        <span class="lance-pub-placar">${b.team1} <strong>${l.gol1}×${l.gol2}</strong> ${b.team2}</span>
+        <span class="badge-comp-ok">✅</span>
+      </div>`).join('')}
+    </div>`;
+  }
+
+  function renderPainelAdmin(b) {
+    const lances = b.lances || [];
+    const comComp = lances.filter(l=>l.pago && l.comprovante);
+    const semComp = lances.filter(l=>l.pago && !l.comprovante);
+    const pendentes = lances.filter(l=>!l.pago);
+
+    // Ganhadores com chave pix
+    const ganhadores = b.ganhadores || [];
+    const participantesMap = Object.fromEntries((b.participants||[]).map(p=>[p.userId,p]));
+
+    return `
+    <div class="admin-panel">
+      <div class="admin-panel-title">💼 Painel do Administrador Financeiro</div>
+
+      ${ganhadores.length > 0 ? `
+      <div class="admin-ganhadores">
+        <div class="admin-sub">🏆 Ganhadores — Transferir valores</div>
+        ${ganhadores.map(g => {
+          const part = participantesMap[g.userId];
+          const pixGanhador = part?.pixRecebimento || '—';
+          return `
+          <div class="ganhador-admin-card">
+            <div class="ganhador-admin-nome">${g.name}</div>
+            <div class="ganhador-admin-valor">R$ ${g.valor?.toFixed(2)}</div>
+            <div class="ganhador-admin-pix">
+              Chave PIX: <strong class="pix-key" onclick="copyPix('${pixGanhador}')">${pixGanhador} 📋</strong>
+            </div>
+            <div class="ganhador-admin-email">${g.email}</div>
+          </div>`;
+        }).join('')}
+      </div>` : ''}
+
+      <div class="admin-sub">📎 Comprovantes para conferir (${comComp.length})</div>
+      ${comComp.length === 0 ? '<p class="empty-p">Nenhum comprovante enviado ainda.</p>' :
+        comComp.map(l => {
+          const part = participantesMap[l.userId];
+          const pixGanhador = part?.pixRecebimento || '(não cadastrado)';
+          return `
+          <div class="comp-admin-card">
+            <div class="comp-admin-header">
+              <span class="comp-admin-nome">${l.userName}</span>
+              <span class="comp-admin-pix">PIX recebimento: <strong>${pixGanhador}</strong></span>
+            </div>
+            <div class="comp-admin-placar">${b.team1} ${l.gol1}×${l.gol2} ${b.team2}</div>
+            <button class="btn-ver-comp" onclick="verComprovanteAdmin('${l.id}')">📄 Ver Comprovante</button>
+          </div>`;
+        }).join('')}
+
+      ${semComp.length > 0 ? `
+      <div class="admin-sub" style="margin-top:12px">⚠️ Pagos sem comprovante (${semComp.length}) — não contam no prêmio</div>
+      ${semComp.map(l=>`
+        <div class="comp-admin-card sem-comp">
+          <span class="comp-admin-nome">${l.userName}</span>
+          <span class="comp-admin-placar">${b.team1} ${l.gol1}×${l.gol2} ${b.team2}</span>
+        </div>`).join('')}` : ''}
+
+      ${pendentes.length > 0 ? `
+      <div class="admin-sub" style="margin-top:12px">⏳ Aguardando pagamento (${pendentes.length})</div>
+      ${pendentes.map(l=>`
+        <div class="comp-admin-card pendente-admin">
+          <span class="comp-admin-nome">${l.userName}</span>
+          <span class="comp-admin-placar">${b.team1} ${l.gol1}×${l.gol2} ${b.team2}</span>
+        </div>`).join('')}` : ''}
+    </div>`;
   }
 
   function renderResultados(b) {
@@ -586,18 +741,23 @@
     try {
       const snap = await getDoc(doc(db,'boloes',bolaoId));
       const b = snap.data();
-      const lances = (b.lances||[]).filter(l=>l.pago);
+      // Apenas lances PAGOS COM COMPROVANTE contam
+      const lances = (b.lances||[]).filter(l=>l.pago && l.comprovante);
       const total = lances.length*(b.valorLance||0)+(b.acumulado||0);
 
-      // Acertadores
       const acertadores = lances.filter(l=>parseInt(l.gol1)===g1&&parseInt(l.gol2)===g2);
-
       let ganhadores = [];
       let acumulado = 0;
 
       if(acertadores.length>0){
         const valorPorGanhador = total/acertadores.length;
-        ganhadores = acertadores.map(l=>({name:l.userName, email:l.userEmail, valor:valorPorGanhador}));
+        // Inclui userId para exibir chave pix no painel admin
+        ganhadores = acertadores.map(l=>({
+          userId: l.userId,
+          name: l.userName,
+          email: l.userEmail,
+          valor: valorPorGanhador
+        }));
       } else {
         acumulado = total;
       }
@@ -610,6 +770,128 @@
 
       toast(ganhadores.length>0 ? `🏆 ${ganhadores.length} ganhador(es) definido(s)!` : '😔 Acumulado para o próximo!','success');
     } catch(e){toast('Erro ao informar resultado','error');} finally{loading(false);}
+  };
+
+  // ─── PARTICIPAR DO BOLÃO ─────────────────────────────────────────────────────
+  window.participarBolao = async (bolaoId) => {
+    if(!currentUser) return;
+    loading(true);
+    try {
+      const snap = await getDoc(doc(db,'boloes',bolaoId));
+      const b = snap.data();
+      const jaParticipa = (b.participants||[]).some(p=>p.userId===currentUser.uid);
+      if(!jaParticipa){
+        const participant = {
+          userId: currentUser.uid,
+          userName: currentUser.displayName || currentUser.email.split('@')[0],
+          userEmail: currentUser.email,
+          pixRecebimento: '',
+          joinedAt: new Date().toISOString()
+        };
+        await updateDoc(doc(db,'boloes',bolaoId),{ participants: arrayUnion(participant) });
+      }
+      toast('Bem-vindo ao bolão! 🎉','success');
+    } catch(e){ toast('Erro ao participar','error'); } finally { loading(false); }
+  };
+
+  // ─── SALVAR CHAVE PIX RECEBIMENTO ────────────────────────────────────────────
+  window.salvarPixRecebimento = async (bolaoId) => {
+    const pixVal = $('minha-pix').value.trim();
+    if(!pixVal){ toast('Informe sua chave PIX','error'); return; }
+    loading(true);
+    try {
+      const snap = await getDoc(doc(db,'boloes',bolaoId));
+      const b = snap.data();
+      const participants = (b.participants||[]).map(p =>
+        p.userId===currentUser.uid ? {...p, pixRecebimento: pixVal} : p
+      );
+      // Se ainda não está na lista, adiciona
+      const jaEsta = participants.some(p=>p.userId===currentUser.uid);
+      if(!jaEsta){
+        participants.push({
+          userId: currentUser.uid,
+          userName: currentUser.displayName || currentUser.email.split('@')[0],
+          userEmail: currentUser.email,
+          pixRecebimento: pixVal,
+          joinedAt: new Date().toISOString()
+        });
+      }
+      await updateDoc(doc(db,'boloes',bolaoId),{participants});
+      toast('Chave PIX salva! ✅','success');
+    } catch(e){ toast('Erro ao salvar PIX','error'); } finally { loading(false); }
+  };
+
+  // ─── MODAL TROCAR ADMINISTRADOR ──────────────────────────────────────────────
+  window.abrirModalAdmin = (bolaoId) => {
+    const old = document.getElementById('modal-admin');
+    if(old) old.remove();
+
+    const b = currentBolao;
+    const participants = b.participants || [];
+    // Inclui o próprio criador como opção
+    const opcoes = [
+      {userId: b.creatorId, name: b.creatorName + ' (Criador)'},
+      ...participants
+        .filter(p=>p.userId !== b.creatorId)
+        .map(p=>({userId:p.userId, name:p.userName}))
+    ];
+
+    const modal = document.createElement('div');
+    modal.id = 'modal-admin';
+    modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.85);z-index:9997;display:flex;align-items:flex-end;justify-content:center;';
+    modal.innerHTML = `
+    <div style="background:#1a2e1e;border-radius:20px 20px 0 0;padding:24px;width:100%;max-width:500px;border-top:2px solid var(--gold);">
+      <div style="font-family:'Bebas Neue';font-size:22px;color:var(--gold);margin-bottom:4px;">💼 Definir Administrador Financeiro</div>
+      <div style="font-size:13px;color:var(--gray-400);margin-bottom:16px;">Escolha quem será responsável por conferir os comprovantes e transferir os prêmios.</div>
+      ${opcoes.map(o=>`
+        <button onclick="definirAdmin('${bolaoId}','${o.userId}','${o.name.replace(/'/g,"\\'")}');document.getElementById('modal-admin').remove()"
+          style="width:100%;background:rgba(255,255,255,.06);border:1px solid var(--border);border-radius:10px;padding:13px 16px;text-align:left;color:var(--white);font-size:14px;font-weight:600;margin-bottom:8px;cursor:pointer;">
+          ${o.userId===(b.adminId||b.creatorId) ? '✅ ' : ''}${o.name}
+        </button>`).join('')}
+      <button onclick="document.getElementById('modal-admin').remove()"
+        style="width:100%;background:none;border:1px solid rgba(255,255,255,.1);border-radius:10px;padding:12px;color:var(--gray-400);font-size:14px;cursor:pointer;margin-top:4px;">Cancelar</button>
+    </div>`;
+    document.body.appendChild(modal);
+  };
+
+  window.definirAdmin = async (bolaoId, adminId, adminName) => {
+    loading(true);
+    try {
+      await updateDoc(doc(db,'boloes',bolaoId),{ adminId, adminName });
+      toast(`💼 ${adminName} é o novo administrador!`,'success');
+    } catch(e){ toast('Erro','error'); } finally { loading(false); }
+  };
+
+  // ─── VER COMPROVANTE ADMIN (por lanceId, qualquer participante) ───────────────
+  window.verComprovanteAdmin = (lanceId) => {
+    if(!currentBolao) return;
+    const lance = (currentBolao.lances||[]).find(l=>l.id===lanceId);
+    if(!lance?.comprovante){ toast('Comprovante não encontrado','error'); return; }
+    mostrarLightbox(lance.comprovante, `${lance.userName} — Comprovante`);
+  };
+
+  function mostrarLightbox(src, titulo='') {
+    const old = document.getElementById('lightbox-comp');
+    if(old) old.remove();
+    const isPdf = src.startsWith('data:application/pdf');
+    const lb = document.createElement('div');
+    lb.id = 'lightbox-comp';
+    lb.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.95);z-index:9998;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:16px;';
+    if(titulo) lb.innerHTML = `<div style="color:var(--gold);font-weight:700;margin-bottom:12px;font-size:14px;">${titulo}</div>`;
+    lb.innerHTML += isPdf
+      ? `<iframe src="${src}" style="width:100%;max-width:500px;height:75vh;border-radius:12px;border:none;"></iframe>`
+      : `<img src="${src}" style="max-width:100%;max-height:75vh;border-radius:12px;object-fit:contain;">`;
+    lb.innerHTML += `<button onclick="document.getElementById('lightbox-comp').remove()"
+      style="margin-top:16px;background:var(--gold);color:#111;border:none;border-radius:10px;padding:11px 32px;font-size:15px;font-weight:700;cursor:pointer;min-height:46px;">✕ Fechar</button>`;
+    document.body.appendChild(lb);
+  }
+
+  // Redireciona verComprovante para mostrarLightbox
+  window.verComprovante = (lanceId) => {
+    if(!currentBolao) return;
+    const lance = (currentBolao.lances||[]).find(l=>l.id===lanceId);
+    if(!lance?.comprovante){ toast('Comprovante não encontrado','error'); return; }
+    mostrarLightbox(lance.comprovante, `Meu comprovante — ${currentBolao.team1} ${lance.gol1}×${lance.gol2} ${currentBolao.team2}`);
   };
 
   // ─── COPY LINK & PIX ──────────────────────────────────────────────────────────
@@ -934,6 +1216,67 @@
   .total-acumulado { font-size: 16px; font-weight: 700; color: var(--gold); margin-bottom: 12px; }
   .btn-resultado { margin-top: 12px; }
 
+  /* ── JOIN CARD ── */
+  .join-card { margin: 24px 16px; background: var(--card-bg); border: 1px solid var(--gold); border-radius: 16px; padding: 24px; text-align: center; }
+  .join-icon { font-size: 48px; margin-bottom: 12px; }
+  .join-title { font-family: 'Bebas Neue'; font-size: 26px; color: var(--gold); margin-bottom: 8px; }
+  .join-desc { font-size: 14px; color: var(--gray-200); margin-bottom: 16px; line-height: 1.5; }
+  .join-info { display: flex; justify-content: center; gap: 16px; font-size: 13px; color: var(--gray-400); margin-bottom: 14px; flex-wrap: wrap; }
+  .aviso-comprovante { background: rgba(229,57,53,.1); border: 1px solid rgba(229,57,53,.25); border-radius: 10px; padding: 10px 14px; font-size: 12px; color: #EF9A9A; margin-bottom: 16px; }
+  .btn-join { font-size: 17px; min-height: 52px; }
+
+  /* ── ADMIN BANNER ── */
+  .admin-banner { display: flex; align-items: center; gap: 12px; margin: 0 16px 12px; background: linear-gradient(135deg, rgba(249,168,37,.12), rgba(255,214,0,.06)); border: 1px solid rgba(249,168,37,.35); border-radius: 12px; padding: 12px 14px; }
+  .admin-icon { font-size: 24px; }
+  .admin-label { font-size: 10px; text-transform: uppercase; letter-spacing: .5px; color: var(--gray-400); }
+  .admin-name { font-size: 15px; font-weight: 700; color: var(--gold); }
+  .btn-trocar-admin { margin-left: auto; background: rgba(255,214,0,.15); border: 1px solid var(--gold); color: var(--gold); border-radius: 8px; padding: 6px 12px; font-size: 12px; font-weight: 600; cursor: pointer; white-space: nowrap; }
+
+  /* ── AVISO COMPROVANTE INLINE ── */
+  .aviso-comprovante-inline { margin: 0 16px 12px; background: rgba(229,57,53,.08); border: 1px solid rgba(229,57,53,.2); border-radius: 10px; padding: 10px 14px; font-size: 12px; color: #EF9A9A; }
+
+  /* ── PIX RECEBIMENTO ── */
+  .pix-recebimento-section { margin: 0 16px 12px; background: var(--card-bg); border: 1px solid var(--border); border-radius: 12px; padding: 14px; }
+  .pix-recebimento-row { display: flex; gap: 8px; margin: 8px 0 4px; }
+  .pix-recebimento-input { flex: 1; background: rgba(255,255,255,.07); border: 1px solid var(--border); border-radius: 8px; color: var(--white); font-size: 15px; padding: 10px 12px; font-family: inherit; }
+  .pix-recebimento-input:focus { outline: none; border-color: var(--gold); }
+  .btn-salvar-pix { background: var(--green-mid); color: #fff; border: none; border-radius: 8px; padding: 10px 14px; font-size: 13px; font-weight: 700; cursor: pointer; white-space: nowrap; }
+  .pix-hint { font-size: 11px; color: var(--gray-400); }
+
+  /* ── LANCES PÚBLICOS ── */
+  .lances-publicos-section { margin: 0 16px 12px; background: var(--card-bg); border: 1px solid var(--border); border-radius: 12px; padding: 14px; }
+  .aviso-mini { font-size: 11px; color: var(--gray-400); margin-bottom: 10px; background: rgba(255,255,255,.04); padding: 8px 10px; border-radius: 8px; }
+  .lance-pub-row { display: flex; align-items: center; gap: 8px; padding: 8px 0; border-bottom: 1px solid rgba(255,255,255,.05); }
+  .lance-pub-row:last-child { border-bottom: none; }
+  .lance-pub-nome { font-size: 13px; font-weight: 600; min-width: 90px; }
+  .lance-pub-placar { flex: 1; font-size: 13px; color: var(--gray-200); }
+  .lance-pub-placar strong { color: var(--gold); }
+  .badge-comp-ok { font-size: 16px; }
+
+  /* ── ADMIN PANEL ── */
+  .admin-panel { margin: 0 16px 12px; background: linear-gradient(135deg, rgba(249,168,37,.07), rgba(0,0,0,.1)); border: 1px solid rgba(249,168,37,.3); border-radius: 14px; padding: 16px; }
+  .admin-panel-title { font-family: 'Bebas Neue'; font-size: 20px; color: var(--gold); letter-spacing: 1px; margin-bottom: 14px; }
+  .admin-sub { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .5px; color: var(--gold-dark); margin-bottom: 8px; }
+  .comp-admin-card { background: rgba(255,255,255,.05); border-radius: 10px; padding: 10px 12px; margin-bottom: 8px; }
+  .comp-admin-card.sem-comp { opacity: .6; display: flex; justify-content: space-between; align-items: center; }
+  .comp-admin-card.pendente-admin { opacity: .5; display: flex; justify-content: space-between; align-items: center; border-left: 3px solid var(--gold-dark); }
+  .comp-admin-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 4px; flex-wrap: wrap; gap: 4px; }
+  .comp-admin-nome { font-size: 14px; font-weight: 700; }
+  .comp-admin-pix { font-size: 11px; color: var(--gray-400); }
+  .comp-admin-placar { font-size: 13px; color: var(--gray-200); margin-bottom: 8px; }
+
+  /* ── GANHADORES ADMIN ── */
+  .admin-ganhadores { background: rgba(255,214,0,.07); border: 1px solid rgba(255,214,0,.2); border-radius: 12px; padding: 12px; margin-bottom: 14px; }
+  .ganhador-admin-card { background: rgba(255,255,255,.05); border-radius: 10px; padding: 10px 12px; margin-bottom: 8px; border-left: 3px solid var(--gold); }
+  .ganhador-admin-nome { font-size: 15px; font-weight: 700; }
+  .ganhador-admin-valor { font-family: 'Bebas Neue'; font-size: 22px; color: var(--gold); }
+  .ganhador-admin-pix { font-size: 13px; color: var(--gray-200); margin: 2px 0; }
+  .ganhador-admin-email { font-size: 11px; color: var(--gray-400); }
+
+  /* ── LANCE SEM COMPROVANTE ── */
+  .my-lance-card.pago-sem-comp { border-left: 3px solid #FF8F00; }
+  .btn-pago-sem { background: rgba(255,255,255,.06); border: 1px solid rgba(255,255,255,.1); border-radius: 8px; padding: 8px 14px; font-size: 12px; color: var(--gray-400); cursor: pointer; width: 100%; }
+
   /* ── BOTTOM NAV ── */
   .bottom-nav { position: fixed; bottom: 0; left: 0; right: 0; background: #0D1A0F; border-top: 1px solid var(--border); display: flex; z-index: 100; }
   .nav-btn { flex: 1; padding: 12px 0 8px; background: none; border: none; color: var(--gray-400); cursor: pointer; font-size: 11px; display: flex; flex-direction: column; align-items: center; gap: 2px; transition: color .2s; }
@@ -1015,11 +1358,6 @@
       <div class="form-group"><label>Senha</label><input type="password" id="reg-pass" placeholder="Mínimo 6 caracteres"></div>
       <button class="btn-primary" onclick="registerUser()">Criar Conta 🎉</button>
     </div>
-  </div>
-
-  <div style="margin-top:20px;text-align:center;color:var(--gray-400);font-size:12px;padding:0 20px">
-    ⚠️ Para ativar o app, substitua as credenciais do Firebase no código.<br>
-    <a href="https://console.firebase.google.com" target="_blank" style="color:var(--gold)">console.firebase.google.com</a>
   </div>
 </div>
 
