@@ -278,7 +278,7 @@
     const totalLances = lances.length;
     const totalPagos = lances.filter(l=>l.pago).length;
 
-    const deadline = new Date(gd.getTime() - 60*60*1000);
+    const deadline = new Date(gd.getTime() - 30*60*1000);
     const apostaEncerrada = now >= deadline || b.status !== 'open';
     const canBet = !apostaEncerrada && canSeeContent;
 
@@ -345,6 +345,9 @@
       <div class="team-hero">${b.team2}</div>
     </div>
 
+    <!-- Apostas confirmadas ACIMA do admin banner -->
+    ${renderLancesPublicos(b)}
+
     <!-- Admin financeiro banner -->
     <div class="admin-banner">
       <span class="admin-icon">💼</span>
@@ -394,7 +397,7 @@
     </div>` : ''}
 
     <!-- Fazer lance -->
-    ${!apostaEncerrada ? `<div class="deadline-info">⏰ Apostas encerram 60 min antes do jogo</div>` : ''}
+    ${!apostaEncerrada ? `<div class="deadline-info">⏰ Apostas encerram 30 min antes do jogo</div>` : ''}
     ${canBet ? `
     <div class="bet-section">
       <div class="section-title">⚽ Fazer Lance</div>
@@ -409,7 +412,7 @@
         </div>
         <button class="btn-primary" onclick="addLance()">+ Adicionar Lance (R$ ${b.valorLance?.toFixed(2)})</button>
       </div>
-    </div>` : `<div class="apostaEncerrada">🔒 Apostas encerradas (60 min antes do jogo)</div>`}
+    </div>` : `<div class="apostaEncerrada">🔒 Apostas encerradas${b.status!=='open' ? ' (bolão encerrado)' : ' (30 min antes do jogo)'}</div>`}
 
     <!-- Meus lances -->
     ${myLances.length > 0 ? `
@@ -419,7 +422,7 @@
       <div class="my-lance-card ${l.pago && l.comprovante ? 'pago' : l.pago ? 'pago-sem-comp' : 'pendente'}">
         <div class="lance-placar">${b.team1} ${l.gol1} × ${l.gol2} ${b.team2}</div>
         <div class="lance-status">${l.pago && l.comprovante ? '✅ Pago com comprovante' : l.pago ? '⚠️ Pago sem comprovante' : '⏳ Aguardando pagamento'}</div>
-        ${!l.comprovante ? `
+        ${!l.comprovante && !apostaEncerrada ? `
         <div class="pix-reminder">
           Transfira <strong>R$ ${b.valorLance?.toFixed(2)}</strong> para:<br>
           <span class="pix-key" onclick="copyPix('${b.pixKey}')">${b.pixKey} <span style="font-size:11px;color:var(--gold)">📋 copiar</span></span>
@@ -431,6 +434,8 @@
         </div>
         ${!l.pago ? `<div class="divider-or">— ou —</div>
         <button class="btn-pago-sem" onclick="confirmarPagamento('${b.id}','${l.id}')">Marcar pago sem comprovante</button>` : ''}
+        ` : !l.comprovante && apostaEncerrada ? `
+        <div class="encerrado-aviso">🔒 Apostas encerradas — comprovante não pode mais ser enviado.</div>
         ` : `
         <div class="comprovante-pago">
           <button class="btn-ver-comp" onclick="verComprovante('${l.id}')">📄 Ver Comprovante</button>
@@ -440,9 +445,6 @@
       <button class="btn-concluir" onclick="concluirApostas('${b.id}')">🏁 Concluir Minhas Apostas</button>` : ''}
       ${myLances.every(l=>l.concluido) ? '<div class="concluido-msg">✅ Suas apostas estão concluídas!</div>' : ''}
     </div>` : ''}
-
-    <!-- Lances pagos com comprovante — visível a todos -->
-    ${renderLancesPublicos(b)}
 
     <!-- Participantes -->
     <div class="participants-section">
@@ -608,8 +610,8 @@
 
     const now = new Date();
     const gd = new Date(currentBolao.gameDateTime);
-    const deadline = new Date(gd.getTime()-60*60*1000);
-    if(now>=deadline){toast('Apostas encerradas (60 min antes do jogo)','error');return;}
+    const deadline = new Date(gd.getTime()-30*60*1000);
+    if(now>=deadline){toast('Apostas encerradas (30 min antes do jogo)','error');return;}
 
     loading(true);
     try {
@@ -633,6 +635,14 @@
   };
 
   window.confirmarPagamento = async (bolaoId, lanceId) => {
+    // Bloqueia se apostas encerradas
+    if(currentBolao) {
+      const gd = new Date(currentBolao.gameDateTime);
+      const deadline = new Date(gd.getTime()-30*60*1000);
+      if(new Date() >= deadline || currentBolao.status !== 'open'){
+        toast('Apostas encerradas','error'); return;
+      }
+    }
     loading(true);
     try {
       const snap = await getDoc(doc(db,'boloes',bolaoId));
@@ -646,7 +656,15 @@
   window.uploadComprovante = async (bolaoId, lanceId, input) => {
     const file = input.files[0]; if(!file) return;
 
-    // Limite de 1.5MB antes de comprimir
+    // Bloqueia se apostas encerradas
+    if(currentBolao) {
+      const gd = new Date(currentBolao.gameDateTime);
+      const deadline = new Date(gd.getTime()-30*60*1000);
+      const encerrado = new Date() >= deadline || currentBolao.status !== 'open';
+      if(encerrado){ toast('Apostas encerradas — comprovante não aceito','error'); input.value=''; return; }
+    }
+
+    // Limite de 5MB
     if(file.size > 5 * 1024 * 1024) {
       toast('Arquivo muito grande. Use imagem menor que 5MB.','error'); return;
     }
@@ -714,11 +732,11 @@
 
   async function checkAutoClose(bolaoId, b, lances) {
     const gd = new Date(b.gameDateTime);
-    const deadline1h = new Date(gd.getTime()-60*60*1000);
+    const deadline30m = new Date(gd.getTime()-30*60*1000);
     const now = new Date();
     const pagos = lances.filter(l=>l.pago);
     const allConcluded = pagos.length>0 && pagos.every(l=>l.concluido);
-    if(allConcluded || now>=deadline1h) {
+    if(allConcluded || now>=deadline30m) {
       await updateDoc(doc(db,'boloes',bolaoId),{status:'closed', lances});
     }
   }
@@ -946,8 +964,8 @@
       if(diff<=0){ el.textContent='🔴 Jogo em andamento / finalizado'; clearInterval(countdownInterval); return; }
       const h=Math.floor(diff/3600000), m=Math.floor((diff%3600000)/60000), s=Math.floor((diff%60000)/1000);
       el.textContent=`⏱ ${h}h ${m}min ${s}s para o jogo`;
-      // Auto-encerrar 60 min antes se status open
-      if(diff<=3600000 && currentBolao?.status==='open'){
+      // Auto-encerrar 30 min antes se status open
+      if(diff<=1800000 && currentBolao?.status==='open'){
         updateDoc(doc(db,'boloes',bolaoId),{status:'closed'}).catch(()=>{});
       }
     },1000);
@@ -1276,6 +1294,7 @@
   /* ── LANCE SEM COMPROVANTE ── */
   .my-lance-card.pago-sem-comp { border-left: 3px solid #FF8F00; }
   .btn-pago-sem { background: rgba(255,255,255,.06); border: 1px solid rgba(255,255,255,.1); border-radius: 8px; padding: 8px 14px; font-size: 12px; color: var(--gray-400); cursor: pointer; width: 100%; }
+  .encerrado-aviso { background: rgba(229,57,53,.08); border: 1px solid rgba(229,57,53,.2); border-radius: 8px; padding: 10px 12px; font-size: 12px; color: #EF9A9A; margin-top: 6px; }
 
   /* ── BOTTOM NAV ── */
   .bottom-nav { position: fixed; bottom: 0; left: 0; right: 0; background: #0D1A0F; border-top: 1px solid var(--border); display: flex; z-index: 100; }
