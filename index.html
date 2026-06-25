@@ -826,27 +826,35 @@ function showNotifModal(n,docId){
   const m=document.createElement('div');
   m.id='notif-modal-'+docId;
   m.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.85);z-index:9996;display:flex;align-items:flex-end;justify-content:center';
-  m.innerHTML=`<div style="background:#1a2e1e;border-radius:20px 20px 0 0;padding:22px;width:100%;max-width:500px;border-top:2px solid var(--gold)">
+  m.innerHTML=`<div style="background:#1a2e1e;border-radius:20px 20px 0 0;padding:22px;width:100%;max-width:500px;border-top:2px solid var(--gold);padding-bottom:max(22px,env(safe-area-inset-bottom))">
     <div style="font-size:32px;text-align:center;margin-bottom:8px">🎟️</div>
     <div style="font-family:'Bebas Neue',sans-serif;font-size:22px;color:var(--gold);margin-bottom:6px;text-align:center">Convite para Bolão!</div>
     <div style="font-size:14px;color:var(--gray-200);margin-bottom:4px;text-align:center"><strong>${n.bolaoName}</strong></div>
     <div style="font-size:13px;color:var(--gray-400);margin-bottom:4px;text-align:center">${n.team1} × ${n.team2}</div>
-    <div style="font-size:12px;color:var(--gray-400);margin-bottom:16px;text-align:center">Convite de ${n.creatorName}</div>
+    <div style="font-size:12px;color:var(--gray-400);margin-bottom:16px;text-align:center">Convite de <strong style="color:var(--white)">${n.creatorName}</strong></div>
     <button onclick="aceitarConviteNotif('${n.bolaoId}','${docId}')"
-      style="width:100%;background:linear-gradient(135deg,var(--gold),var(--gold-dark));color:#111;border:none;border-radius:12px;padding:13px;font-size:15px;font-weight:700;cursor:pointer;margin-bottom:8px">
-      🎟️ Ver Bolão e Participar
+      style="width:100%;background:linear-gradient(135deg,var(--gold),var(--gold-dark));color:#111;border:none;border-radius:12px;padding:13px;font-size:15px;font-weight:700;cursor:pointer;margin-bottom:8px;min-height:48px">
+      ✅ Aceitar e Participar do Bolão
     </button>
-    <button onclick="dispensarNotif('${docId}')"
-      style="width:100%;background:none;border:1px solid rgba(255,255,255,.1);border-radius:10px;padding:11px;color:var(--gray-400);cursor:pointer;font-size:13px">
-      Agora não
+    <button onclick="recusarConviteNotif('${docId}')"
+      style="width:100%;background:none;border:1px solid rgba(229,57,53,.4);border-radius:10px;padding:11px;color:#EF9A9A;cursor:pointer;font-size:13px;min-height:44px">
+      ✕ Recusar Convite
     </button>
   </div>`;
   document.body.appendChild(m);
 }
 
 window.aceitarConviteNotif=async(bolaoId,docId)=>{
-  await dispensarNotif(docId);
+  const m=$('notif-modal-'+docId);if(m)m.remove();
+  // Adiciona automaticamente à lista de participantes
+  await participar(bolaoId);
   openBolao(bolaoId);
+};
+
+window.recusarConviteNotif=async docId=>{
+  const m=$('notif-modal-'+docId);if(m)m.remove();
+  try{await updateDoc(doc(db,'notificacoes',docId),{lida:true,recusado:true});}catch(e){}
+  toast('Convite recusado.','i');
 };
 
 window.dispensarNotif=async docId=>{
@@ -947,6 +955,10 @@ function renderDetail(b){
 
   // ── CARD 2: Informações do Bolão (MINIMIZADO por padrão) ─────────────────
   const infoInner=`
+  ${isCreator&&!encerrado?`
+  <button onclick="abrirEdicaoBolao('${b.id}')" style="width:100%;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.12);border-radius:9px;padding:9px 14px;color:var(--gray-200);font-size:13px;font-weight:600;cursor:pointer;margin-bottom:10px;text-align:left">
+    ✏️ Editar Nome, Times, Data e Horário
+  </button>`:''}
   <div class="admin-strip">
     <span style="font-size:22px">💼</span>
     <div class="admin-strip-text"><div class="admin-strip-label">Administrador Financeiro</div><div class="admin-strip-name">${adminName}</div></div>
@@ -958,7 +970,7 @@ function renderDetail(b){
     <div class="icard">💳 PIX p/ pagamento<strong onclick="cpx('${b.pixKey}')">${b.pixKey} 📋</strong></div>
   </div>
   <div class="srow">
-    <div class="sbox"><span class="snum">${uniqPart.length}</span><span class="slbl">Apostadores</span></div>
+    <div class="sbox"><span class="snum">${uniqPart.length}</span><span class="slbl">Participantes</span></div>
     <div class="sbox"><span class="snum">${lances.length}</span><span class="slbl">Lances</span></div>
     <div class="sbox"><span class="snum">${pagosComp.length}</span><span class="slbl">Pagos c/ Comp.</span></div>
     <div class="sbox pot"><span class="snum">R$${pot.toFixed(0)}</span><span class="slbl">Pot Total</span></div>
@@ -976,7 +988,15 @@ function renderDetail(b){
     <button onclick="cpl('${link}')" style="margin-top:6px;width:100%;background:rgba(255,214,0,.1);border:1px solid rgba(255,214,0,.3);color:var(--gold);border-radius:8px;padding:8px;font-size:12px;font-weight:600;cursor:pointer">
       📲 Compartilhar Link
     </button>
-    ${b.invitedEmails?.length?`<div class="invited-lbl" style="margin-top:5px">Convidados: ${b.invitedEmails.join(', ')}</div>`:''}
+    ${b.invitedEmails?.length?`<div class="invited-lbl" style="margin-top:5px">Já convidados: ${b.invitedEmails.join(', ')}</div>`:''}
+    <div style="margin-top:10px">
+      <div class="share-lbl">✉️ Enviar novo convite por e-mail</div>
+      <div style="display:flex;gap:6px;margin-top:5px">
+        <input type="email" id="novo-convite-email" placeholder="novo@email.com"
+          style="flex:1;background:rgba(255,255,255,.07);border:1px solid var(--border);border-radius:8px;color:var(--white);padding:9px 11px;font-size:14px;font-family:inherit;-webkit-appearance:none">
+        <button onclick="enviarNovoConvite('${b.id}')" class="btn-green" style="white-space:nowrap;padding:9px 14px;font-size:12px">Convidar</button>
+      </div>
+    </div>
   </div>`:''}
   ${isCreator&&b.status==='open'?`<button class="btn-red" style="margin-top:11px" onclick="encerrar('${b.id}')">🔒 Encerrar Bolão Manualmente</button>`:''}
   `;
@@ -1296,7 +1316,8 @@ window.informarRes=async bid=>{
 window.participar=async bid=>{
   ld(1);try{
     const s=await getDoc(doc(db,'boloes',bid)),b=s.data();
-    if(!(b.participants||[]).some(p=>p.userId===CU.uid)){
+    const jaEsta=(b.participants||[]).some(p=>p.userId===CU.uid);
+    if(!jaEsta){
       const us=await getDoc(doc(db,'users',CU.uid));
       const pix=us.exists()?us.data().pixRecebimento||'':'';
       await updateDoc(doc(db,'boloes',bid),{participants:arrayUnion({
@@ -1304,8 +1325,110 @@ window.participar=async bid=>{
         userEmail:CU.email,pixRecebimento:pix,joinedAt:new Date().toISOString()
       })});
     }
-    toast('Bem-vindo ao bolão! 🎉','s');
+    // Marca todas as notificações de convite deste bolão como lidas
+    try{
+      const qn=query(collection(db,'notificacoes'),where('userId','==',CU.uid),where('bolaoId','==',bid),where('lida','==',false));
+      const ns=await getDocs(qn);
+      await Promise.all(ns.docs.map(nd=>updateDoc(doc(db,'notificacoes',nd.id),{lida:true})));
+    }catch(e){}
+    toast(jaEsta?'Você já é participante! 🎉':'Bem-vindo ao bolão! 🎉 Você consta na lista de participantes.','s');
   }catch(e){toast('Erro ao participar','e');}finally{ld(0);}
+};
+
+// ── ENVIAR NOVO CONVITE (pós-criação) ─────────────────────────────────────────
+window.enviarNovoConvite=async bid=>{
+  const emailInput=$('novo-convite-email');
+  const email=(emailInput?.value||'').trim().toLowerCase();
+  if(!email||!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)){
+    toast('Informe um e-mail válido','e');return;
+  }
+  if(!CB){toast('Bolão não encontrado','e');return;}
+
+  ld(1);try{
+    // Adiciona à lista de convidados do bolão
+    const snap=await getDoc(doc(db,'boloes',bid));
+    const b=snap.data();
+    const jaConvidado=(b.invitedEmails||[]).includes(email);
+
+    if(!jaConvidado){
+      await updateDoc(doc(db,'boloes',bid),{invitedEmails:arrayUnion(email)});
+    }
+
+    // Verifica se o usuário já tem cadastro → notificação in-app
+    let notifEnviada=false;
+    try{
+      const usersSnap=await getDocs(query(collection(db,'users'),where('email','==',email)));
+      if(!usersSnap.empty){
+        const ud=usersSnap.docs[0];
+        await setDoc(doc(db,'notificacoes',`convite_${ud.id}_${bid}_${Date.now()}`),{
+          tipo:'convite',userId:ud.id,bolaoId:bid,
+          bolaoName:b.name,team1:b.team1,team2:b.team2,
+          creatorName:CU.displayName||CU.email,
+          lida:false,createdAt:serverTimestamp()
+        });
+        notifEnviada=true;
+      }
+    }catch(e){}
+
+    if(emailInput)emailInput.value='';
+    if(jaConvidado){
+      toast(`${email} já foi convidado anteriormente.`,'i');
+    } else if(notifEnviada){
+      toast(`Convite enviado! ${email} receberá uma notificação no app. ✅`,'s');
+    } else {
+      toast(`Convite registrado para ${email}. Link compartilhado! ✅`,'s');
+    }
+  }catch(e){toast('Erro ao enviar convite: '+e.message,'e');}finally{ld(0);}
+};
+
+// ── EDITAR BOLÃO ──────────────────────────────────────────────────────────────
+window.abrirEdicaoBolao=bid=>{
+  const old=$('modal-edit');if(old)old.remove();
+  const b=CB;if(!b)return;
+  const gd=new Date(b.gameDateTime);
+  const dateStr=gd.toISOString().slice(0,10);
+  const timeStr=gd.toTimeString().slice(0,5);
+  const m=document.createElement('div');
+  m.id='modal-edit';
+  m.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.88);z-index:9997;display:flex;align-items:flex-end;justify-content:center;overflow-y:auto';
+  m.innerHTML=`<div style="background:#1a2e1e;border-radius:20px 20px 0 0;padding:22px;width:100%;max-width:500px;border-top:2px solid var(--gold);padding-bottom:max(22px,env(safe-area-inset-bottom))">
+    <div style="font-family:'Bebas Neue',sans-serif;font-size:22px;color:var(--gold);margin-bottom:4px">✏️ Editar Bolão</div>
+    <div style="font-size:12px;color:var(--gray-400);margin-bottom:16px">Disponível enquanto as apostas estiverem abertas.</div>
+    <div class="fg"><label>Nome do Bolão *</label><input type="text" id="ed-name" value="${b.name.replace(/"/g,'&quot;')}"></div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+      <div class="fg"><label>Time 1 *</label><input type="text" id="ed-team1" value="${b.team1.replace(/"/g,'&quot;')}"></div>
+      <div class="fg"><label>Time 2 *</label><input type="text" id="ed-team2" value="${b.team2.replace(/"/g,'&quot;')}"></div>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+      <div class="fg"><label>Data *</label><input type="date" id="ed-date" value="${dateStr}"></div>
+      <div class="fg"><label>Horário *</label><input type="time" id="ed-time" value="${timeStr}"></div>
+    </div>
+    <div style="font-size:11px;color:#EF9A9A;background:rgba(229,57,53,.08);border:1px solid rgba(229,57,53,.2);border-radius:8px;padding:8px 11px;margin-bottom:14px">
+      ⚠️ Valor do lance e chave PIX não podem ser alterados após a criação.
+    </div>
+    <button onclick="salvarEdicaoBolao('${bid}')" class="btn" style="margin-bottom:8px">💾 Salvar Alterações</button>
+    <button onclick="document.getElementById('modal-edit').remove()" style="width:100%;background:none;border:1px solid rgba(255,255,255,.1);border-radius:10px;padding:11px;color:var(--gray-400);cursor:pointer;font-size:13px">Cancelar</button>
+  </div>`;
+  document.body.appendChild(m);
+};
+
+window.salvarEdicaoBolao=async bid=>{
+  const name=($('ed-name')?.value||'').trim();
+  const team1=($('ed-team1')?.value||'').trim();
+  const team2=($('ed-team2')?.value||'').trim();
+  const date=($('ed-date')?.value||'').trim();
+  const time=($('ed-time')?.value||'').trim();
+  if(!name||!team1||!team2||!date||!time){toast('Preencha todos os campos','e');return;}
+  const gd=new Date(date+'T'+time);
+  if(isNaN(gd.getTime())){toast('Data/horário inválido','e');return;}
+  // Não permite editar se já passou o prazo
+  const deadline=new Date(gd.getTime()-30*60*1000);
+  if(CB?.status!=='open'){toast('Bolão encerrado — não é possível editar','e');return;}
+  ld(1);try{
+    await updateDoc(doc(db,'boloes',bid),{name,team1,team2,gameDateTime:gd.toISOString()});
+    const m=$('modal-edit');if(m)m.remove();
+    toast('Bolão atualizado! ✅','s');
+  }catch(e){toast('Erro ao salvar: '+e.message,'e');}finally{ld(0);}
 };
 
 window.modalAdmin=bid=>{
