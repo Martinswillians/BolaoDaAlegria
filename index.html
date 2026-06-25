@@ -292,6 +292,9 @@ body{font-family:'Inter',sans-serif;background:var(--dark);color:var(--white);
 .ps-avatar{width:56px;height:56px;background:linear-gradient(135deg,var(--gold),var(--gold-dark));border-radius:50%;
   font-family:'Bebas Neue';font-size:26px;color:var(--dark);display:flex;align-items:center;justify-content:center;margin:0 auto 14px}
 
+/* LIST SECTIONS */
+.list-section-title{font-size:13px;font-weight:700;color:var(--gray-400);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px;padding:0 2px}
+
 /* RESPONSIVE */
 @media(max-width:370px){.vh-team{font-size:20px}.srow{flex-wrap:wrap}.sbox{min-width:calc(50% - 3px)}.igrid{grid-template-columns:1fr}.frow{grid-template-columns:1fr}}
 @media(min-width:600px){.cc{margin-left:auto;margin-right:auto;max-width:560px}.vs-hero,.dhdr{max-width:600px;margin:0 auto}.home-body,.create-body,.profile-body{max-width:540px;margin:0 auto}}
@@ -404,15 +407,51 @@ const $=id=>document.getElementById(id);
 const ld=v=>{const e=$('ld');if(e)e.style.display=v?'flex':'none'};
 const toast=(m,t='i')=>{const d=document.createElement('div');d.className=`toast t${t}`;d.textContent=m;document.body.appendChild(d);setTimeout(()=>d.classList.add('on'),10);setTimeout(()=>{d.classList.remove('on');setTimeout(()=>d.remove(),350)},3200)};
 
+// ── INVITE URL — captura ANTES do auth state ─────────────────────────────────
+const invParam=new URLSearchParams(location.search).get('bolao');
+if(invParam)localStorage.setItem('pendingBolao',invParam);
+const pendingBolao=()=>localStorage.getItem('pendingBolao');
+const clearPending=()=>localStorage.removeItem('pendingBolao');
+
 // ── AUTH ─────────────────────────────────────────────────────────────────────
 onAuthStateChanged(auth,async u=>{
   if(u){
     CU=u;
     try{const s=await getDoc(doc(db,'users',u.uid));UP=s.exists()?s.data():{}}catch(e){UP={}}
     const el=$('user-name-top');if(el)el.textContent=u.displayName||u.email.split('@')[0];
-    showView('home');loadBoloes();
-  }else{CU=null;UP={};showView('auth');}
+    // Auto-processo bolão pendente (link de convite)
+    const pid=pendingBolao();
+    if(pid){clearPending();showView('detail');setTimeout(()=>openBolao(pid),400);}
+    else{showView('home');loadBoloes();}
+  }else{
+    CU=null;UP={};
+    // Se há bolão pendente, mostra preview de convite antes do login
+    const pid=pendingBolao();
+    if(pid){showInvitePreview(pid);}
+    else{showView('auth');}
+  }
 });
+
+// Preview de convite para usuário não logado
+async function showInvitePreview(bid){
+  try{
+    const snap=await getDoc(doc(db,'boloes',bid));
+    if(!snap.exists()){showView('auth');return;}
+    const b=snap.data();
+    const gd=new Date(b.gameDateTime);
+    // Mostra tela auth com banner de convite no topo
+    showView('auth');
+    const banner=document.createElement('div');
+    banner.style.cssText='background:linear-gradient(135deg,#0D3B1A,#1a2e1e);border:1px solid var(--gold);border-radius:12px;padding:14px;margin-bottom:16px;text-align:center';
+    banner.innerHTML=`<div style="font-size:22px;margin-bottom:6px">🎟️</div>
+    <div style="font-family:Bebas Neue,sans-serif;font-size:18px;color:var(--gold);margin-bottom:4px">Você foi convidado!</div>
+    <div style="font-size:12px;color:var(--gray-200);margin-bottom:2px"><strong>${b.name}</strong></div>
+    <div style="font-size:12px;color:var(--gray-400)">${b.team1} × ${b.team2} — ${gd.toLocaleDateString('pt-BR')}</div>
+    <div style="font-size:11px;color:var(--gold-dark);margin-top:6px">Faça login ou cadastre-se para participar</div>`;
+    const authCard=document.querySelector('.auth-card');
+    if(authCard)authCard.insertBefore(banner,authCard.firstChild);
+  }catch(e){showView('auth');}
+}
 
 window.registerUser=async()=>{
   const name=$('reg-name').value.trim(),email=$('reg-email').value.trim(),pass=$('reg-pass').value;
@@ -432,7 +471,7 @@ window.loginUser=async()=>{
 };
 
 window.logoutUser=async()=>{
-  if(unsub)unsub();await signOut(auth);toast('Até logo! 👋','i');
+  if(unsub)unsub();clearPending();await signOut(auth);toast('Até logo! 👋','i');
 };
 
 // ── NAVIGATION ────────────────────────────────────────────────────────────────
@@ -499,27 +538,165 @@ function makeCC(id,title,innerHTML,openByDefault=false,accentClass='',badgeHTML=
   </div>`;
 }
 
+// ── CREATE BOLÃO ──────────────────────────────────────────────────────────────
+window.createBolao=async()=>{
+  const name=($('b-name')?.value||'').trim();
+  const team1=($('b-team1')?.value||'').trim();
+  const team2=($('b-team2')?.value||'').trim();
+  const date=($('b-date')?.value||'').trim();
+  const time=($('b-time')?.value||'').trim();
+  const valor=parseFloat($('b-valor')?.value||'0');
+  const pix=($('b-pix')?.value||'').trim();
+  const emailsRaw=($('b-emails')?.value||'').trim();
+
+  if(!name||!team1||!team2||!date||!time||!valor||!pix){
+    toast('Preencha todos os campos obrigatórios (*)','e');return;
+  }
+  if(isNaN(valor)||valor<=0){toast('Informe um valor válido por lance','e');return;}
+
+  ld(1);
+  try{
+    const gameDateTime=new Date(date+'T'+time);
+    const emails=emailsRaw?emailsRaw.split(',').map(e=>e.trim()).filter(Boolean):[];
+
+    const ref=await addDoc(collection(db,'boloes'),{
+      name,team1,team2,
+      gameDateTime:gameDateTime.toISOString(),
+      valorLance:valor,pixKey:pix,
+      invitedEmails:emails,
+      creatorId:CU.uid,
+      creatorName:CU.displayName||CU.email,
+      adminId:CU.uid,
+      adminName:CU.displayName||CU.email.split('@')[0],
+      createdAt:serverTimestamp(),
+      status:'open',
+      participants:[],lances:[],
+      resultado:null,ganhadores:null,acumulado:0,
+      notificacoesEnviadas:false
+    });
+
+    // Notificar usuários convidados que já têm conta
+    if(emails.length){
+      try{
+        const usersSnap=await getDocs(collection(db,'users'));
+        const notifs=[];
+        usersSnap.forEach(ud=>{
+          const udata=ud.data();
+          if(emails.includes(udata.email)){
+            notifs.push(setDoc(doc(db,'notificacoes',`${ud.id}_${ref.id}`),{
+              userId:ud.id,bolaoId:ref.id,bolaoName:name,
+              team1,team2,creatorName:CU.displayName||CU.email,
+              lida:false,createdAt:serverTimestamp()
+            }));
+          }
+        });
+        if(notifs.length)await Promise.all(notifs);
+      }catch(e){/* silencioso */}
+    }
+
+    toast('Bolão criado! 🎉','s');
+    ['b-name','b-team1','b-team2','b-date','b-time','b-valor','b-pix','b-emails'].forEach(id=>{
+      const el=$(id);if(el)el.value='';
+    });
+    showView('home');
+  }catch(e){
+    console.error('Erro createBolao:',e);
+    toast('Erro ao criar bolão: '+e.message,'e');
+  }finally{ld(0);}
+};
+
 // ── LOAD BOLÕES ───────────────────────────────────────────────────────────────
+// ── LOAD BOLÕES — separado em Criados / Convidados ───────────────────────────
 window.loadBoloes=async()=>{
   if(!CU)return;
   const c=$('boloes-list');if(!c)return;
   c.innerHTML='<div class="ld3"><span></span><span></span><span></span></div>';
+
+  // Verifica notificações de convite
+  checkNotificacoes();
+
   try{
-    const q1=query(collection(db,'boloes'),where('creatorId','==',CU.uid));
-    const s1=await getDocs(q1),all=await getDocs(collection(db,'boloes'));
-    const seen=new Set(),list=[];
-    s1.forEach(d=>{if(!seen.has(d.id)){seen.add(d.id);list.push({id:d.id,...d.data()});}});
-    all.forEach(d=>{
-      if(seen.has(d.id))return;
-      const v=d.data();
-      if((v.lances||[]).some(l=>l.userId===CU.uid)||(v.invitedEmails||[]).includes(CU.email)||(v.participants||[]).some(p=>p.userId===CU.uid)){
-        seen.add(d.id);list.push({id:d.id,...v});
-      }
+    const allSnap=await getDocs(collection(db,'boloes'));
+    const criados=[],convidados=[];
+
+    allSnap.forEach(d=>{
+      const v={id:d.id,...d.data()};
+      if(v.creatorId===CU.uid){criados.push(v);}
+      else if(
+        (v.invitedEmails||[]).includes(CU.email)||
+        (v.participants||[]).some(p=>p.userId===CU.uid)||
+        (v.lances||[]).some(l=>l.userId===CU.uid)
+      ){convidados.push(v);}
     });
-    if(!list.length){c.innerHTML=`<div class="empty-state"><span class="empty-icon">⚽</span><p>Nenhum bolão ainda.<br>Crie um ou aguarde um convite!</p></div>`;return;}
-    list.sort((a,b)=>{const o={open:0,closed:1,finished:2};return o[a.status]!==o[b.status]?o[a.status]-o[b.status]:(b.createdAt?.seconds||0)-(a.createdAt?.seconds||0);});
-    c.innerHTML=list.map(renderCard).join('');
+
+    const sortFn=(a,b)=>{
+      const o={open:0,closed:1,finished:2};
+      return o[a.status]!==o[b.status]?o[a.status]-o[b.status]:(b.createdAt?.seconds||0)-(a.createdAt?.seconds||0);
+    };
+    criados.sort(sortFn);convidados.sort(sortFn);
+
+    if(!criados.length&&!convidados.length){
+      c.innerHTML=`<div class="empty-state"><span class="empty-icon">⚽</span><p>Nenhum bolão ainda.<br>Crie um ou aguarde um convite!</p></div>`;
+      return;
+    }
+
+    let html='';
+    if(criados.length){
+      html+=`<div class="list-section-title">👑 Meus Bolões Criados</div>`;
+      html+=criados.map(renderCard).join('');
+    }
+    if(convidados.length){
+      html+=`<div class="list-section-title" style="margin-top:${criados.length?'16px':'0'}">📨 Bolões Convidados</div>`;
+      html+=convidados.map(renderCard).join('');
+    }
+    c.innerHTML=html;
   }catch(e){c.innerHTML='<p style="color:#ff6b6b;text-align:center;padding:20px">Erro ao carregar bolões</p>';}
+};
+
+async function checkNotificacoes(){
+  if(!CU)return;
+  try{
+    const q=query(collection(db,'notificacoes'),where('userId','==',CU.uid),where('lida','==',false));
+    const snap=await getDocs(q);
+    if(snap.empty)return;
+    snap.forEach(d=>{
+      const n=d.data();
+      showNotifModal(n,d.id);
+    });
+  }catch(e){}
+}
+
+function showNotifModal(n,docId){
+  const old=$('notif-modal-'+docId);if(old)return;
+  const m=document.createElement('div');
+  m.id='notif-modal-'+docId;
+  m.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.85);z-index:9996;display:flex;align-items:flex-end;justify-content:center';
+  m.innerHTML=`<div style="background:#1a2e1e;border-radius:20px 20px 0 0;padding:22px;width:100%;max-width:500px;border-top:2px solid var(--gold)">
+    <div style="font-size:32px;text-align:center;margin-bottom:8px">🎟️</div>
+    <div style="font-family:'Bebas Neue',sans-serif;font-size:22px;color:var(--gold);margin-bottom:6px;text-align:center">Convite para Bolão!</div>
+    <div style="font-size:14px;color:var(--gray-200);margin-bottom:4px;text-align:center"><strong>${n.bolaoName}</strong></div>
+    <div style="font-size:13px;color:var(--gray-400);margin-bottom:4px;text-align:center">${n.team1} × ${n.team2}</div>
+    <div style="font-size:12px;color:var(--gray-400);margin-bottom:16px;text-align:center">Convite de ${n.creatorName}</div>
+    <button onclick="aceitarConviteNotif('${n.bolaoId}','${docId}')"
+      style="width:100%;background:linear-gradient(135deg,var(--gold),var(--gold-dark));color:#111;border:none;border-radius:12px;padding:13px;font-size:15px;font-weight:700;cursor:pointer;margin-bottom:8px">
+      🎟️ Ver Bolão e Participar
+    </button>
+    <button onclick="dispensarNotif('${docId}')"
+      style="width:100%;background:none;border:1px solid rgba(255,255,255,.1);border-radius:10px;padding:11px;color:var(--gray-400);cursor:pointer;font-size:13px">
+      Agora não
+    </button>
+  </div>`;
+  document.body.appendChild(m);
+}
+
+window.aceitarConviteNotif=async(bolaoId,docId)=>{
+  await dispensarNotif(docId);
+  openBolao(bolaoId);
+};
+
+window.dispensarNotif=async docId=>{
+  const m=$('notif-modal-'+docId);if(m)m.remove();
+  try{await updateDoc(doc(db,'notificacoes',docId),{lida:true});}catch(e){}
 };
 
 function renderCard(b){
@@ -772,6 +949,16 @@ window.addLance=async()=>{
       timestamp:new Date().toISOString()
     })});
     toast('Lance adicionado! Pague o PIX para confirmar. 💳','s');
+    // Fix 4: Força o card de lances aberto e rola até meus lances
+    const body=$('ccb-lances'),arrow=$('cca-lances');
+    if(body&&!body.classList.contains('open')){
+      body.classList.add('open');
+      if(arrow)arrow.textContent='▾';
+    }
+    setTimeout(()=>{
+      const mlHdr=document.querySelector('.mlances-hdr');
+      if(mlHdr)mlHdr.scrollIntoView({behavior:'smooth',block:'start'});
+    },400);
   }catch(e){toast('Erro ao adicionar lance','e');}finally{ld(0);}
 };
 
@@ -905,10 +1092,6 @@ function startCD(gd,bid){
     if(diff<=1800000&&CB?.status==='open')updateDoc(doc(db,'boloes',bid),{status:'closed'}).catch(()=>{});
   },1000);
 }
-
-// ── INVITE URL ────────────────────────────────────────────────────────────────
-const inv=new URLSearchParams(location.search).get('bolao');
-if(inv)onAuthStateChanged(auth,u=>{if(u)setTimeout(()=>openBolao(inv),700);});
 
 // ── FIREBASE ERRORS ───────────────────────────────────────────────────────────
 function ferr(c){const m={'auth/email-already-in-use':'E-mail já cadastrado','auth/weak-password':'Senha fraca (mín 6 chars)','auth/invalid-email':'E-mail inválido','auth/user-not-found':'Usuário não encontrado','auth/wrong-password':'Senha incorreta','auth/invalid-credential':'E-mail ou senha incorretos','auth/too-many-requests':'Muitas tentativas'};return m[c]||'Erro: '+c;}
