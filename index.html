@@ -450,6 +450,8 @@ onAuthStateChanged(auth,async u=>{
     const pid=pendingBolao();
     if(pid){clearPending();showView('detail');setTimeout(()=>openBolao(pid),400);}
     else{showView('home');loadBoloes();}
+    // Real-time listener para notificações (convites, prêmios, etc.)
+    startNotifListener(u.uid);
   }else{
     CU=null;UP={};
     // Se há bolão pendente, mostra preview de convite antes do login
@@ -498,8 +500,43 @@ window.loginUser=async()=>{
 };
 
 window.logoutUser=async()=>{
-  if(unsub)unsub();clearPending();await signOut(auth);toast('Até logo! 👋','i');
+  if(unsub)unsub();
+  if(window._notifUnsub){window._notifUnsub();window._notifUnsub=null;}
+  clearPending();await signOut(auth);toast('Até logo! 👋','i');
 };
+
+// ── REAL-TIME NOTIFICATION LISTENER ──────────────────────────────────────────
+function startNotifListener(uid){
+  if(window._notifUnsub)window._notifUnsub();
+  // Track which notifs we've already shown this session to avoid double display
+  const shown=new Set();
+  window._notifUnsub=onSnapshot(
+    query(collection(db,'notificacoes'),where('userId','==',uid),where('lida','==',false)),
+    snap=>{
+      snap.docChanges().forEach(change=>{
+        if(change.type==='added'||change.type==='modified'){
+          const d=change.doc;
+          if(shown.has(d.id))return;
+          shown.add(d.id);
+          const n=d.data();
+          // Small delay so UI is ready
+          setTimeout(()=>{
+            if(n.tipo==='premio'){showPremioModal(n,d.id);}
+            else if(n.tipo==='pagamento_recebido'){
+              toast(`💰 Prêmio do bolão "${n.bolaoName}" foi pago!`,'s');
+              dispensarNotif(d.id);
+            }
+            else if(n.tipo==='alerta_pix'){
+              toast(`⚠️ Cadastre seu PIX para receber o prêmio do bolão "${n.bolaoName}"!`,'e');
+              openProfile();dispensarNotif(d.id);
+            }
+            else{showNotifModal(n,d.id);}
+          },800);
+        }
+      });
+    }
+  );
+}
 
 // ── NAVIGATION ────────────────────────────────────────────────────────────────
 window.showView=v=>{
@@ -642,9 +679,6 @@ window.loadBoloes=async()=>{
   if(!CU)return;
   const c=$('boloes-list');if(!c)return;
   c.innerHTML='<div class="ld3"><span></span><span></span><span></span></div>';
-
-  // Verifica notificações de convite
-  checkNotificacoes();
 
   try{
     const allSnap=await getDocs(collection(db,'boloes'));
@@ -935,11 +969,14 @@ function renderDetail(b){
     <div class="part-label">👥 Participantes (${uniqPart.length})</div>
     ${uniqPart.length?`<div class="chip-list">${uniqPart.map(p=>`<span class="chip">${p.name}</span>`).join('')}</div>`:'<span style="font-size:11px;color:var(--gray-400)">Nenhum ainda.</span>'}
   </div>
-  ${isCreator?`
+  ${isCreator||isAdmin?`
   <div class="share-row">
     <div class="share-lbl">📨 Link de convite</div>
     <div class="share-box"><input readonly value="${link}"><button class="btn-sm" onclick="cpl('${link}')">Copiar</button></div>
-    ${b.invitedEmails?.length?`<div class="invited-lbl">Convidados: ${b.invitedEmails.join(', ')}</div>`:''}
+    <button onclick="cpl('${link}')" style="margin-top:6px;width:100%;background:rgba(255,214,0,.1);border:1px solid rgba(255,214,0,.3);color:var(--gold);border-radius:8px;padding:8px;font-size:12px;font-weight:600;cursor:pointer">
+      📲 Compartilhar Link
+    </button>
+    ${b.invitedEmails?.length?`<div class="invited-lbl" style="margin-top:5px">Convidados: ${b.invitedEmails.join(', ')}</div>`:''}
   </div>`:''}
   ${isCreator&&b.status==='open'?`<button class="btn-red" style="margin-top:11px" onclick="encerrar('${b.id}')">🔒 Encerrar Bolão Manualmente</button>`:''}
   `;
@@ -985,8 +1022,8 @@ function renderDetail(b){
   const lanceBadge=myLances.length?`<span style="background:rgba(67,160,71,.18);color:#81C784;font-size:11px;font-weight:700;padding:2px 8px;border-radius:12px">${myLances.length} lance${myLances.length>1?'s':''}</span>`:'';
   const card3=makeCC('lances','⚽ Lances',fazerHTML+meusHTML,false,'cc-lances',lanceBadge);
 
-  // ── CARD 4: Admin (MINIMIZADO, só para admin) ─────────────────────────────
-  const card4=isAdmin?makeCC('admin','💼 Painel do Administrador',buildAdminInner(b),false,'cc-admin'):'';
+  // ── CARD 4: Admin (MINIMIZADO, para admin e criador) ─────────────────────
+  const card4=(isAdmin||isCreator)?makeCC('admin',isAdmin?'💼 Painel do Administrador':'📊 Painel do Criador',buildAdminInner(b),false,'cc-admin'):'';
 
   // ── CARD 5: Resultado final ───────────────────────────────────────────────
   const card5=buildResultados(b);
@@ -1014,10 +1051,12 @@ function buildAdminInner(b){
   const pend=lances.filter(l=>!l.pago);
   const ganhadores=b.ganhadores||[];
   const pmap=Object.fromEntries((b.participants||[]).map(p=>[p.userId,p]));
+  const viewerIsAdmin=(b.adminId||b.creatorId)===CU.uid;
   let html='';
 
+  // ── Ganhadores + pagamento do prêmio ────────────────────────────────────
   if(ganhadores.length){
-    html+=`<div class="gain-list"><div class="asub">🏆 Ganhadores — Pagamento do Prêmio</div>`;
+    html+=`<div class="gain-list"><div class="asub">🏆 ${viewerIsAdmin?'Ganhadores — Pagamento do Prêmio':'Ganhadores'}</div>`;
     ganhadores.forEach(g=>{
       const pix=g.pixRecebimento||pmap[g.userId]?.pixRecebimento||'';
       const semPix=!pix;
@@ -1030,7 +1069,7 @@ function buildAdminInner(b){
         <div style="background:rgba(229,57,53,.12);border:1px solid rgba(229,57,53,.3);border-radius:8px;padding:8px 10px;margin:6px 0;font-size:12px;color:#EF9A9A">
           ⚠️ <strong>Chave PIX não cadastrada</strong>
         </div>
-        <div style="display:flex;gap:6px;margin-bottom:8px">
+        ${viewerIsAdmin?`<div style="display:flex;gap:6px;margin-bottom:8px">
           <button onclick="enviarAlertaSemPix('${b.id||CB?.id}','${g.userId}','${g.name.replace(/'/g,"\\'")}')"
             style="flex:1;background:rgba(249,168,37,.15);border:1px solid var(--gold-dark);color:var(--gold-dark);border-radius:8px;padding:7px;font-size:11px;font-weight:600;cursor:pointer">
             📬 Enviar Alerta
@@ -1039,37 +1078,49 @@ function buildAdminInner(b){
             style="flex:1;background:rgba(255,255,255,.06);border:1px solid var(--border);color:var(--white);border-radius:8px;padding:7px;font-size:11px;cursor:pointer">
             👤 Ver Contato
           </button>
-        </div>`:`
+        </div>`:''}`:`
         <div class="gain-pix" onclick="cpx('${pix}')">PIX: <strong>${pix} 📋</strong></div>`}
         ${pago?`
         <div style="background:rgba(67,160,71,.12);border:1px solid rgba(67,160,71,.3);border-radius:8px;padding:8px;margin-top:6px">
           <div style="font-size:12px;color:#81C784;font-weight:700">✅ Prêmio pago em ${g.dataPagamento?new Date(g.dataPagamento).toLocaleDateString('pt-BR'):'-'}</div>
-          ${g.comprovantePremio?`<button class="btn-comp-ver" style="margin-top:5px" onclick="verCompPremio('${g.userId}')">📄 Ver Comprovante</button>`:''}
-        </div>`:`
+          ${g.comprovantePremio?`<button class="btn-comp-ver" style="margin-top:5px" onclick="verCompPremio('${g.userId}')">📄 Ver Comprovante do Prêmio</button>`:''}
+        </div>`:viewerIsAdmin?`
         <div style="margin-top:8px;display:flex;flex-direction:column;gap:6px">
           <div class="comp-upload">
             <input type="file" id="cp-${g.userId}" accept="image/*,application/pdf" onchange="uploadCompPremio('${b.id||CB?.id}','${g.userId}',this)">
             <label for="cp-${g.userId}" class="btn-upload" style="font-size:11px">💳 Anexar Comprovante de Pagamento do Prêmio</label>
           </div>
           ${!semPix?`<button onclick="marcarPremioPago('${b.id||CB?.id}','${g.userId}')"
-            style="background:var(--green-mid);color:#fff;border:none;border-radius:8px;padding:8px;font-size:12px;font-weight:600;cursor:pointer">
+            style="background:var(--green-mid);color:#fff;border:none;border-radius:8px;padding:8px;font-size:12px;font-weight:600;cursor:pointer;width:100%">
             ✅ Marcar como Pago (sem comprovante)
           </button>`:''}
-        </div>`}
+        </div>`:'<div style="font-size:11px;color:var(--gray-400);margin-top:6px">⏳ Aguardando pagamento pelo administrador</div>'}
       </div>`;
     });
     html+='</div>';
   }
 
-  html+=`<div class="asub">📎 Comprovantes das Apostas (${comComp.length})</div>`;
-  if(!comComp.length){html+='<p style="font-size:11px;color:var(--gray-400)">Nenhum ainda.</p>';}
+  // ── Lances pagos com comprovante ─────────────────────────────────────────
+  html+=`<div class="asub" style="margin-top:${ganhadores.length?'4px':'0'}">📎 Lances Pagos com Comprovante (${comComp.length})</div>`;
+  if(!comComp.length){html+='<p style="font-size:11px;color:var(--gray-400);margin-bottom:8px">Nenhum ainda.</p>';}
   comComp.forEach(l=>{
     const part=pmap[l.userId];
     const pix=l.pixRecebimento||part?.pixRecebimento||'(não cadastrado)';
-    html+=`<div class="acomp"><div class="acomp-hdr"><span class="acomp-nome">${l.userName}</span><span class="acomp-pix">PIX: ${pix}</span></div><div class="acomp-placar">${b.team1} ${l.gol1}×${l.gol2} ${b.team2}</div><button class="btn-comp-ver" onclick="verCompAdmin('${l.id}')">📄 Ver Comprovante</button></div>`;
+    html+=`<div class="acomp">
+      <div class="acomp-hdr"><span class="acomp-nome">${l.userName}</span><span class="acomp-pix">PIX: ${pix}</span></div>
+      <div class="acomp-placar">${b.team1} ${l.gol1}×${l.gol2} ${b.team2}</div>
+      <button class="btn-comp-ver" onclick="verCompAdmin('${l.id}')">📄 Ver Comprovante</button>
+    </div>`;
   });
-  if(semComp.length){html+=`<div class="asub" style="margin-top:10px">⚠️ Pagos sem comprovante (${semComp.length})</div>`;semComp.forEach(l=>{html+=`<div class="acomp sem"><span>${l.userName}</span><span>${b.team1} ${l.gol1}×${l.gol2} ${b.team2}</span></div>`;});}
-  if(pend.length){html+=`<div class="asub" style="margin-top:10px">⏳ Pendentes (${pend.length})</div>`;pend.forEach(l=>{html+=`<div class="acomp pend"><span>${l.userName}</span><span>${b.team1} ${l.gol1}×${l.gol2} ${b.team2}</span></div>`;});}
+
+  if(semComp.length){
+    html+=`<div class="asub" style="margin-top:10px">⚠️ Pagos sem comprovante (${semComp.length})</div>`;
+    semComp.forEach(l=>{html+=`<div class="acomp sem"><span>${l.userName}</span><span>${b.team1} ${l.gol1}×${l.gol2} ${b.team2}</span></div>`;});
+  }
+  if(pend.length){
+    html+=`<div class="asub" style="margin-top:10px">⏳ Aguardando pagamento (${pend.length})</div>`;
+    pend.forEach(l=>{html+=`<div class="acomp pend"><span>${l.userName}</span><span>${b.team1} ${l.gol1}×${l.gol2} ${b.team2}</span></div>`;});
+  }
   return html;
 }
 
