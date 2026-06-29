@@ -66,6 +66,7 @@ body{font-family:'Inter',sans-serif;background:var(--dark);color:var(--white);
 .auth-logo{text-align:center;margin-bottom:24px;width:100%;max-width:400px}
 .auth-logo .ball{font-size:50px;display:block;animation:bns 1.2s ease-in-out infinite alternate}
 @keyframes bns{to{transform:translateY(-10px)}}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:.5}}
 .auth-logo h1{font-family:'Bebas Neue';font-size:38px;color:var(--gold);letter-spacing:2px;line-height:1}
 .auth-logo p{color:var(--gray-400);font-size:13px;margin-top:3px}
 .auth-card{background:rgba(255,255,255,.05);border:1px solid var(--border);border-radius:var(--radius);padding:22px;width:100%;max-width:400px}
@@ -331,6 +332,7 @@ body{font-family:'Inter',sans-serif;background:var(--dark);color:var(--white);
 .bf{background:rgba(156,39,176,.2);color:#CE93D8}
 .bp{background:rgba(33,150,243,.2);color:#64B5F6}
 .bpriv{background:rgba(255,255,255,.07);color:var(--gray-400)}
+.bpend{background:rgba(255,152,0,.2);color:#FFB74D;animation:blink 2s ease-in-out infinite}
 
 /* BOLÃO META STRIP (detail view) */
 .bolao-meta-strip{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:8px 14px;background:rgba(255,255,255,.03);border-bottom:1px solid rgba(255,255,255,.05)}
@@ -491,9 +493,22 @@ import{getFirestore,collection,doc,setDoc,getDoc,getDocs,updateDoc,arrayUnion,on
 const app=initializeApp({apiKey:"AIzaSyCWmI-VYCTqAKSSOCf2jhjM7CSzJFpyS30",authDomain:"bolaodaalegria-4f433.firebaseapp.com",projectId:"bolaodaalegria-4f433",storageBucket:"bolaodaalegria-4f433.firebasestorage.app",messagingSenderId:"357246060944",appId:"1:357246060944:web:f277e7017e68269f0a0b15"});
 const auth=getAuth(app),db=getFirestore(app);
 
+// ── STATE ─────────────────────────────────────────────────────────────────────
 let CU=null,CB=null,unsub=null,UP={},lanceUnicoAtivo=false,publicoAtivo=false;
 const $=id=>document.getElementById(id);
-const ld=v=>{const e=$('ld');if(e)e.style.display=v?'flex':'none'};
+
+// ── SAFETY: always clear loading after 8s max ─────────────────────────────────
+let _ldTimeout=null;
+const ld=v=>{
+  const e=$('ld');if(!e)return;
+  e.style.display=v?'flex':'none';
+  if(v){
+    if(_ldTimeout)clearTimeout(_ldTimeout);
+    _ldTimeout=setTimeout(()=>{e.style.display='none';},8000);
+  }else{
+    if(_ldTimeout){clearTimeout(_ldTimeout);_ldTimeout=null;}
+  }
+};
 const toast=(m,t='i')=>{const d=document.createElement('div');d.className=`toast t${t}`;d.textContent=m;document.body.appendChild(d);setTimeout(()=>d.classList.add('on'),10);setTimeout(()=>{d.classList.remove('on');setTimeout(()=>d.remove(),350)},3200)};
 
 window.toggleLanceUnico=()=>{
@@ -518,19 +533,21 @@ const clearPending=()=>localStorage.removeItem('pendingBolao');
 
 // ── AUTH ─────────────────────────────────────────────────────────────────────
 onAuthStateChanged(auth,async u=>{
+  ld(0); // Always clear loading when auth state is known
+  // Reset login button if it was disabled
+  const btn=document.querySelector('#panel-login .btn');
+  if(btn){btn.textContent='Entrar ⚽';btn.disabled=false;}
+
   if(u){
     CU=u;
-    try{const s=await getDoc(doc(db,'users',u.uid));UP=s.exists()?s.data():{}}catch(e){UP={}}
+    try{const s=await getDoc(doc(db,'users',u.uid));UP=s.exists()?s.data():{}}catch(e){UP={};}
     const el=$('user-name-top');if(el)el.textContent=u.displayName||u.email.split('@')[0];
-    // Auto-processo bolão pendente (link de convite)
     const pid=pendingBolao();
     if(pid){clearPending();showView('detail');setTimeout(()=>openBolao(pid),400);}
     else{showView('home');loadBoloes();}
-    // Real-time listener para notificações (convites, prêmios, etc.)
     startNotifListener(u.uid);
   }else{
     CU=null;UP={};
-    // Se há bolão pendente, mostra preview de convite antes do login
     const pid=pendingBolao();
     if(pid){showInvitePreview(pid);}
     else{showView('auth');}
@@ -559,20 +576,35 @@ async function showInvitePreview(bid){
 }
 
 window.registerUser=async()=>{
-  const name=$('reg-name').value.trim(),email=$('reg-email').value.trim(),pass=$('reg-pass').value;
+  const name=$('reg-name')?.value.trim(),email=$('reg-email')?.value.trim(),pass=$('reg-pass')?.value;
   if(!name||!email||!pass){toast('Preencha todos os campos','e');return;}
-  ld(1);try{
+  const btn=document.querySelector('#panel-register .btn');
+  if(btn){btn.textContent='Cadastrando...';btn.disabled=true;}
+  try{
     const c=await createUserWithEmailAndPassword(auth,email,pass);
     await updateProfile(c.user,{displayName:name});
     await setDoc(doc(db,'users',c.user.uid),{name,email,phone:'',pixRecebimento:'',createdAt:serverTimestamp()});
     toast('Cadastro realizado! 🎉','s');
-  }catch(e){toast(ferr(e.code),'e');}finally{ld(0);}
+    // onAuthStateChanged will navigate to home
+  }catch(e){
+    toast(ferr(e.code),'e');
+    if(btn){btn.textContent='Criar Conta 🎉';btn.disabled=false;}
+  }
 };
 
 window.loginUser=async()=>{
-  const email=$('login-email').value.trim(),pass=$('login-pass').value;
+  const email=$('login-email')?.value.trim(),pass=$('login-pass')?.value;
   if(!email||!pass){toast('Preencha e-mail e senha','e');return;}
-  ld(1);try{await signInWithEmailAndPassword(auth,email,pass);}catch(e){toast(ferr(e.code),'e');}finally{ld(0);}
+  // Show a spinner only on the button — not the full overlay (avoids stuck state)
+  const btn=document.querySelector('#panel-login .btn');
+  if(btn){btn.textContent='Entrando...';btn.disabled=true;}
+  try{
+    await signInWithEmailAndPassword(auth,email,pass);
+    // onAuthStateChanged will fire and handle navigation
+  }catch(e){
+    toast(ferr(e.code),'e');
+    if(btn){btn.textContent='Entrar ⚽';btn.disabled=false;}
+  }
 };
 
 window.logoutUser=async()=>{
@@ -839,8 +871,16 @@ window.loadBoloes=async()=>{
     const criados=[],convidados=[],publicos=[],finalizados=[];
     const myBolaoIds=new Set();
 
+    const autoFinalize=[];
     allSnap.forEach(d=>{
       const v={id:d.id,...d.data()};
+      const gd=new Date(v.gameDateTime);
+      const tresMhApos=new Date(gd.getTime()+3*60*60*1000);
+      // Auto-finalize: 3h after game, not yet finished, no result
+      if(new Date()>=tresMhApos&&v.status!=='finished'&&!v.resultado){
+        autoFinalize.push(v.id);
+        v.status='finished';v.aguardandoResultado=true;
+      }
       const isCreator=v.creatorId===CU.uid;
       const isParticipant=(v.invitedEmails||[]).includes(CU.email)||
         (v.participants||[]).some(p=>p.userId===CU.uid)||
@@ -860,6 +900,13 @@ window.loadBoloes=async()=>{
         // If finished and was public, don't show in finalizados unless user participated
       }
     });
+
+    // Batch auto-finalize in Firestore (silent — never blocks UI)
+    if(autoFinalize.length){
+      Promise.all(autoFinalize.map(bid=>
+        updateDoc(doc(db,'boloes',bid),{status:'finished',resultado:null,aguardandoResultado:true})
+      )).catch(()=>{});
+    }
 
     const sortFn=(a,b)=>{
       const o={open:0,closed:1,finished:2};
@@ -1071,7 +1118,11 @@ function renderCard(b, context='mine'){
   (b.lances||[]).forEach(l=>partMap.set(l.userId,1));
   const partCount=partMap.size;
 
-  const statusBadge=b.status==='finished'?'<span class="badge bf">Finalizado</span>':b.status==='closed'?'<span class="badge bc">Encerrado</span>':'<span class="badge bo">Aberto</span>';
+  const statusBadge=b.status==='finished'&&b.aguardandoResultado&&!b.resultado
+    ?'<span class="badge bpend">⏳ Aguardando resultado</span>'
+    :b.status==='finished'?'<span class="badge bf">Finalizado</span>'
+    :b.status==='closed'?'<span class="badge bc">Encerrado</span>'
+    :'<span class="badge bo">Aberto</span>';
   const privBadge=b.publico?'<span class="badge bp">🌍 Público</span>':'<span class="badge bpriv">🔒 Privado</span>';
   const lanceRuleBadge=b.lanceUnico?'<span class="rule-badge rule-no">🚫 Lance único</span>':'<span class="rule-badge rule-yes">✅ Lances livres</span>';
 
@@ -1106,6 +1157,24 @@ window.openBolao=async id=>{
   ld(1);
   try{
     if(unsub)unsub();
+
+    // Check immediately if 3h passed without result — auto-finalize
+    const snap0=await getDoc(doc(db,'boloes',id));
+    if(snap0.exists()){
+      const b0=snap0.data();
+      const gd0=new Date(b0.gameDateTime);
+      const tresMhApos=new Date(gd0.getTime()+3*60*60*1000);
+      if(new Date()>=tresMhApos&&b0.status!=='finished'&&!b0.resultado){
+        try{
+          await updateDoc(doc(db,'boloes',id),{
+            status:'finished',
+            resultado:null,
+            aguardandoResultado:true
+          });
+        }catch(e){}
+      }
+    }
+
     unsub=onSnapshot(doc(db,'boloes',id),snap=>{
       if(!snap.exists()){toast('Bolão não encontrado','e');return;}
       CB={id:snap.id,...snap.data()};
@@ -1305,17 +1374,8 @@ function renderDetail(b){
   // ── CARD 5: Resultado final ───────────────────────────────────────────────
   const card5=buildResultados(b);
 
-  // ── CARD 6: Informar resultado (admin, bolão closed) ─────────────────────
-  const card6=isAdmin&&b.status==='closed'?makeCC('ires','🏆 Informar Resultado Final',`
-  <div class="score-row">
-    <div class="score-team">${b.team1}</div>
-    <input type="number" id="r1" min="0" max="20" placeholder="0" class="sinput">
-    <span class="ssep">×</span>
-    <input type="number" id="r2" min="0" max="20" placeholder="0" class="sinput">
-    <div class="score-team">${b.team2}</div>
-  </div>
-  <button class="btn" style="margin-top:8px" onclick="informarRes('${b.id}')">🏆 Definir Ganhadores</button>
-  `,true,'cc-res'):'';
+  // ── CARD 6: Informar resultado — now handled inside buildResultados ──────
+  const card6='';;
 
   root.innerHTML=heroHTML+card1+card2+card3+card4+card5+card6+'<div style="height:16px"></div>';
   startCD(gd,b.id);
@@ -1404,9 +1464,39 @@ function buildAdminInner(b){
 function buildResultados(b){
   const pagosComp=(b.lances||[]).filter(l=>l.pago&&l.comprovante);
   const pot=pagosComp.length*(b.valorLance||0)+(b.acumulado||0);
+  const isAdmin=(b.adminId||b.creatorId)===CU.uid;
+
+  // ── Aguardando resultado (auto-finalizado após 3h) ────────────────────────
+  if(b.status==='finished'&&b.aguardandoResultado&&!b.resultado){
+    return makeCC('aguardando','⏳ Aguardando Resultado',`
+    <div style="text-align:center;padding:8px 0 12px">
+      <div style="font-size:40px;margin-bottom:8px">⏳</div>
+      <div style="font-family:'Bebas Neue';font-size:20px;color:var(--gold-dark);margin-bottom:8px">Aguardando Informação do Placar</div>
+      <div style="font-size:13px;color:var(--gray-200);margin-bottom:4px">O jogo já aconteceu. O administrador financeiro ainda não informou o resultado.</div>
+      <div style="font-size:12px;color:var(--gray-400);margin-bottom:14px">💰 Total em jogo: <strong style="color:var(--gold)">R$ ${pot.toFixed(2)}</strong></div>
+      ${isAdmin?`
+      <div style="background:rgba(249,168,37,.1);border:1px solid rgba(249,168,37,.3);border-radius:10px;padding:12px;margin-bottom:12px;text-align:left">
+        <div style="font-size:12px;font-weight:700;color:var(--gold-dark);margin-bottom:8px">📋 Informar placar final agora:</div>
+        <div class="score-row" style="justify-content:center;margin-bottom:10px">
+          <div class="score-team">${b.team1}</div>
+          <input type="number" id="r1" min="0" max="20" placeholder="0" class="sinput">
+          <span class="ssep">×</span>
+          <input type="number" id="r2" min="0" max="20" placeholder="0" class="sinput">
+          <div class="score-team">${b.team2}</div>
+        </div>
+        <button class="btn" onclick="informarRes('${b.id||CB?.id}')">🏆 Definir Resultado e Ganhadores</button>
+      </div>`:''}
+      <div style="text-align:left">
+        <div style="font-size:11px;font-weight:700;color:var(--gray-400);margin-bottom:6px">Apostas confirmadas:</div>
+        ${pagosComp.length?pagosComp.map(l=>`<div class="lr">${l.userName}: ${b.team1} ${l.gol1}×${l.gol2} ${b.team2}</div>`).join(''):'<div style="font-size:11px;color:var(--gray-400)">Nenhuma aposta paga com comprovante.</div>'}
+      </div>
+    </div>
+    `,true,'cc-res');
+  }
+
+  // ── Resultado definido ────────────────────────────────────────────────────
   if(b.status==='finished'&&b.resultado){
     const myGain=(b.ganhadores||[]).find(g=>g.userId===CU.uid);
-    const isCreatorOrAdmin=b.creatorId===CU.uid||(b.adminId||b.creatorId)===CU.uid;
     return makeCC('resfinal','🏆 Resultado Final',`
     <div class="placar-final">${b.team1} <span>${b.resultado.gol1}</span> × <span>${b.resultado.gol2}</span> ${b.team2}</div>
     ${b.ganhadores?.length?`<div class="ganhou-list">🎉 Ganhadores:${b.ganhadores.map(g=>`<div class="ganhou-chip">${g.name} — R$ ${g.valor?.toFixed(2)}</div>`).join('')}</div>`:`<div class="acumulou">😔 Ninguém acertou! R$ ${pot.toFixed(2)} acumulado.</div>`}
@@ -1422,9 +1512,22 @@ function buildResultados(b){
     ${pagosComp.map(l=>`<div class="lr">${l.userName}: ${b.team1} ${l.gol1}×${l.gol2} ${b.team2}</div>`).join('')}
     `,true,'cc-res');
   }
+
+  // ── Apostas encerradas, aguardando resultado do admin ────────────────────
   if(b.status==='closed'){
-    return makeCC('fechado','📊 Apostas Encerradas',`
+    return makeCC('fechado','📊 Apostas Encerradas — Aguardando Resultado',`
     <div class="pot-total-str">💰 Total em jogo: R$ ${pot.toFixed(2)}</div>
+    ${isAdmin?`
+    <div style="margin-bottom:12px">
+      <div class="score-row" style="justify-content:center;margin-bottom:8px">
+        <div class="score-team">${b.team1}</div>
+        <input type="number" id="r1" min="0" max="20" placeholder="0" class="sinput">
+        <span class="ssep">×</span>
+        <input type="number" id="r2" min="0" max="20" placeholder="0" class="sinput">
+        <div class="score-team">${b.team2}</div>
+      </div>
+      <button class="btn" onclick="informarRes('${b.id||CB?.id}')">🏆 Definir Resultado e Ganhadores</button>
+    </div>`:''}
     ${pagosComp.map(l=>`<div class="lr">${l.userName}: ${b.team1} ${l.gol1}×${l.gol2} ${b.team2}</div>`).join('')}
     `,true,'');
   }
@@ -1891,12 +1994,38 @@ window.showModal=({icon,title,msg,btn,onOk})=>{
 let cdt=null;
 function startCD(gd,bid){
   if(cdt)clearInterval(cdt);
-  cdt=setInterval(()=>{
-    const diff=gd-new Date(),el=document.querySelector('.dstatus');
+  cdt=setInterval(async()=>{
+    const now=new Date();
+    const diff=gd-now;
+    const el=document.querySelector('.dstatus');
     if(!el){clearInterval(cdt);return;}
-    if(diff<=0){el.textContent='🔴 Em andamento / finalizado';clearInterval(cdt);return;}
-    el.textContent=`⏱ ${Math.floor(diff/3600000)}h ${Math.floor((diff%3600000)/60000)}min ${Math.floor((diff%60000)/1000)}s`;
-    if(diff<=1800000&&CB?.status==='open')updateDoc(doc(db,'boloes',bid),{status:'closed'}).catch(()=>{});
+
+    // Auto-encerrar apostas 30 min antes
+    if(diff<=1800000&&diff>0&&CB?.status==='open'){
+      updateDoc(doc(db,'boloes',bid),{status:'closed'}).catch(()=>{});
+    }
+
+    // Auto-finalizar 3h após o jogo sem placar informado
+    const tresMhApós=new Date(gd.getTime()+3*60*60*1000);
+    if(now>=tresMhApós&&CB&&CB.status!=='finished'&&!CB.resultado){
+      try{
+        await updateDoc(doc(db,'boloes',bid),{
+          status:'finished',
+          resultado:null,
+          aguardandoResultado:true
+        });
+      }catch(e){}
+    }
+
+    if(diff<=0){
+      const horasApos=Math.abs(Math.floor(diff/3600000));
+      el.textContent=horasApos<3?`🔴 Jogo em andamento (${Math.floor(Math.abs(diff)/60000)} min)`:
+        CB?.resultado?'✅ Finalizado':'⏳ Aguardando resultado do administrador';
+      if(diff<=-10800000){clearInterval(cdt);}
+      return;
+    }
+    const h=Math.floor(diff/3600000),m=Math.floor((diff%3600000)/60000),s=Math.floor((diff%60000)/1000);
+    el.textContent=`⏱ ${h}h ${m}min ${s}s`;
   },1000);
 }
 
