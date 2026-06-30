@@ -449,7 +449,7 @@ body{font-family:'Inter',sans-serif;background:var(--dark);color:var(--white);
       <div class="fg"><label>Time 2 *</label><input type="text" id="b-team2" placeholder="Argentina"></div>
     </div>
     <div class="frow">
-      <div class="fg"><label>Data *</label><input type="date" id="b-date"></div>
+      <div class="fg"><label>Data *</label><input type="date" id="b-date" min=""></div>
       <div class="fg"><label>Horário *</label><input type="time" id="b-time"></div>
     </div>
     <div class="fg"><label>Valor por Lance (R$) *</label><input type="number" id="b-valor" placeholder="10.00" step="0.01" min="0.01"></div>
@@ -617,22 +617,26 @@ window.logoutUser=async()=>{
 function startNotifListener(uid){
   if(window._notifUnsub)window._notifUnsub();
   const shown=new Set();
-  let pendingNotifs=[]; // buffer for notification panel
 
+  // IMPORTANT: query only by userId (single field) to avoid needing a
+  // Firestore composite index for (userId + lida). We filter "lida" client-side.
   window._notifUnsub=onSnapshot(
-    query(collection(db,'notificacoes'),where('userId','==',uid),where('lida','==',false)),
+    query(collection(db,'notificacoes'),where('userId','==',uid)),
     snap=>{
+      const allDocs=snap.docs.map(d=>({id:d.id,...d.data()}));
+      const naoLidas=allDocs.filter(n=>!n.lida);
+
       // Update bell badge count
-      const count=snap.size;
       const badge=$('bell-badge');
-      if(badge){badge.textContent=count;badge.style.display=count>0?'flex':'none';}
+      if(badge){badge.textContent=naoLidas.length;badge.style.display=naoLidas.length>0?'flex':'none';}
 
       snap.docChanges().forEach(change=>{
         if(change.type==='added'||change.type==='modified'){
           const d=change.doc;
+          const n=d.data();
+          if(n.lida)return; // skip already-read
           if(shown.has(d.id))return;
           shown.add(d.id);
-          const n=d.data();
           setTimeout(()=>{
             if(n.tipo==='premio'){showPremioModal(n,d.id);}
             else if(n.tipo==='pagamento_recebido'){
@@ -644,12 +648,15 @@ function startNotifListener(uid){
               openProfile();dispensarNotif(d.id);
             }
             else{
-              // convite — show as modal only once; also update bell
+              // convite — show as modal
               showNotifModal(n,d.id);
             }
           },800);
         }
       });
+    },
+    err=>{
+      console.error('Erro no listener de notificações:',err);
     }
   );
 }
@@ -714,12 +721,13 @@ window.openNotifs=async()=>{
 window.marcarTodasLidas=async()=>{
   if(!CU)return;
   ld(1);try{
-    const q=query(collection(db,'notificacoes'),where('userId','==',CU.uid),where('lida','==',false));
+    const q=query(collection(db,'notificacoes'),where('userId','==',CU.uid));
     const snap=await getDocs(q);
-    await Promise.all(snap.docs.map(d=>updateDoc(doc(db,'notificacoes',d.id),{lida:true})));
+    const naoLidas=snap.docs.filter(d=>!d.data().lida);
+    await Promise.all(naoLidas.map(d=>updateDoc(doc(db,'notificacoes',d.id),{lida:true})));
     toast('Todas marcadas como lidas ✓','s');
     const old=$('notif-panel');if(old)old.remove();
-  }catch(e){toast('Erro','e');}finally{ld(0);}
+  }catch(e){toast('Erro: '+e.message,'e');}finally{ld(0);}
 };
 
 // ── NAVIGATION ────────────────────────────────────────────────────────────────
@@ -727,6 +735,10 @@ window.showView=v=>{
   document.querySelectorAll('.view').forEach(x=>x.style.display='none');
   const el=$('view-'+v);if(el)el.style.display='block';
   if(v==='home')loadBoloes();
+  if(v==='create'){
+    const dateEl=$('b-date');
+    if(dateEl)dateEl.min=new Date().toISOString().slice(0,10);
+  }
 };
 
 window.showTab=t=>{
@@ -801,6 +813,21 @@ window.createBolao=async()=>{
     toast('Preencha todos os campos obrigatórios (*)','e');return;
   }
   if(isNaN(valor)||valor<=0){toast('Informe um valor válido por lance','e');return;}
+
+  // ── Validação: horário do jogo não pode estar no passado ou já em andamento ──
+  const gameDateTimeCheck=new Date(date+'T'+time);
+  if(isNaN(gameDateTimeCheck.getTime())){toast('Data ou horário inválido','e');return;}
+  const agora=new Date();
+  if(gameDateTimeCheck<=agora){
+    toast('O horário do jogo não pode estar no passado ou em andamento. Escolha uma data/horário futuro.','e');
+    return;
+  }
+  // Recomenda no mínimo 30min de antecedência (mesmo prazo do encerramento de apostas)
+  const margemMinima=new Date(agora.getTime()+30*60*1000);
+  if(gameDateTimeCheck<margemMinima){
+    toast('O jogo deve começar em pelo menos 30 minutos a partir de agora, para permitir apostas.','e');
+    return;
+  }
 
   ld(1);
   try{
@@ -967,10 +994,11 @@ window.loadBoloes=async()=>{
 async function checkNotificacoes(){
   if(!CU)return;
   try{
-    const q=query(collection(db,'notificacoes'),where('userId','==',CU.uid),where('lida','==',false));
+    const q=query(collection(db,'notificacoes'),where('userId','==',CU.uid));
     const snap=await getDocs(q);
-    if(snap.empty)return;
-    snap.forEach(d=>{
+    const naoLidas=snap.docs.filter(d=>!d.data().lida);
+    if(!naoLidas.length)return;
+    naoLidas.forEach(d=>{
       const n=d.data();
       if(n.tipo==='premio'){showPremioModal(n,d.id);}
       else if(n.tipo==='pagamento_recebido'){
@@ -1800,9 +1828,10 @@ window.participar=async bid=>{
     }
     // Marca todas as notificações de convite deste bolão como lidas
     try{
-      const qn=query(collection(db,'notificacoes'),where('userId','==',CU.uid),where('bolaoId','==',bid),where('lida','==',false));
+      const qn=query(collection(db,'notificacoes'),where('userId','==',CU.uid));
       const ns=await getDocs(qn);
-      await Promise.all(ns.docs.map(nd=>updateDoc(doc(db,'notificacoes',nd.id),{lida:true})));
+      const matching=ns.docs.filter(d=>d.data().bolaoId===bid&&!d.data().lida);
+      await Promise.all(matching.map(nd=>updateDoc(doc(db,'notificacoes',nd.id),{lida:true})));
     }catch(e){}
     toast(jaEsta?'Você já é participante! 🎉':'Bem-vindo ao bolão! 🎉 Você consta na lista de participantes.','s');
   }catch(e){toast('Erro ao participar','e');}finally{ld(0);}
@@ -1895,8 +1924,12 @@ window.salvarEdicaoBolao=async bid=>{
   const gd=new Date(date+'T'+time);
   if(isNaN(gd.getTime())){toast('Data/horário inválido','e');return;}
   // Não permite editar se já passou o prazo
-  const deadline=new Date(gd.getTime()-30*60*1000);
   if(CB?.status!=='open'){toast('Bolão encerrado — não é possível editar','e');return;}
+  // Validação: novo horário também não pode estar no passado/em andamento
+  const agora=new Date();
+  if(gd<=agora){toast('O horário do jogo não pode estar no passado ou em andamento.','e');return;}
+  const margemMinima=new Date(agora.getTime()+30*60*1000);
+  if(gd<margemMinima){toast('O jogo deve começar em pelo menos 30 minutos a partir de agora.','e');return;}
   ld(1);try{
     await updateDoc(doc(db,'boloes',bid),{name,team1,team2,gameDateTime:gd.toISOString()});
     const m=$('modal-edit');if(m)m.remove();
