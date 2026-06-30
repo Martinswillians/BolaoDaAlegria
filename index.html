@@ -335,7 +335,7 @@ body{font-family:'Inter',sans-serif;background:var(--dark);color:var(--white);
 .bpend{background:rgba(255,152,0,.2);color:#FFB74D;animation:blink 2s ease-in-out infinite}
 
 /* BOLÃO META STRIP (detail view) */
-.bolao-meta-strip{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:8px 14px;background:rgba(255,255,255,.03);border-bottom:1px solid rgba(255,255,255,.05)}
+.bolao-meta-strip{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:8px 14px;background:rgba(255,255,255,.03);border-bottom:1px solid rgba(255,255,255,.05);justify-content:center}
 .bms-creator{font-size:12px;font-weight:600;color:var(--gold-dark)}
 .bms-badge{font-size:11px;font-weight:600;padding:3px 9px;border-radius:10px}
 .bms-no{background:rgba(229,57,53,.12);color:#EF9A9A;border:1px solid rgba(229,57,53,.2)}
@@ -350,6 +350,12 @@ body{font-family:'Inter',sans-serif;background:var(--dark);color:var(--white);
 /* FINISHED SECTION */
 .lsh-finished{background:linear-gradient(135deg,rgba(156,39,176,.15),rgba(156,39,176,.05));border:1px solid rgba(156,39,176,.25);border-bottom:none}
 .lsh-finished .lsh-count{color:#CE93D8}
+.lsh-finished.lsh-toggle{width:100%;cursor:pointer;border-radius:10px;font-family:inherit;text-align:left}
+.lsh-arrow{font-size:13px;color:#CE93D8;font-weight:700;flex-shrink:0;margin-left:4px}
+.lsh-pending{background:linear-gradient(135deg,rgba(255,87,34,.18),rgba(255,87,34,.06));border:1px solid rgba(255,87,34,.3);border-bottom:none;animation:pulse-border 2s ease-in-out infinite}
+.lsh-pending .lsh-count{color:#FF8A65}
+@keyframes pulse-border{0%,100%{border-color:rgba(255,87,34,.3)}50%{border-color:rgba(255,87,34,.6)}}
+.bcard-pending{border-left:3px solid #FF5722;cursor:default}
 
 /* TOGGLE OPTION */
 .toggle-option{display:flex;align-items:flex-start;gap:10px;background:rgba(255,255,255,.04);border:1px solid var(--border);border-radius:10px;padding:12px;cursor:pointer;transition:border-color .2s;margin-bottom:10px}
@@ -365,7 +371,7 @@ body{font-family:'Inter',sans-serif;background:var(--dark);color:var(--white);
 
 /* RESPONSIVE */
 @media(max-width:370px){.vh-team{font-size:20px}.srow{flex-wrap:wrap}.sbox{min-width:calc(50% - 3px)}.igrid{grid-template-columns:1fr}.frow{grid-template-columns:1fr}}
-@media(min-width:600px){.cc{margin-left:auto;margin-right:auto;max-width:560px}.vs-hero,.dhdr{max-width:600px;margin:0 auto}.home-body,.create-body,.profile-body{max-width:540px;margin:0 auto}}
+@media(min-width:600px){.cc{margin-left:auto;margin-right:auto;max-width:560px}.vs-hero,.dhdr,.bolao-meta-strip{max-width:600px;margin:0 auto}.home-body,.create-body,.profile-body{max-width:540px;margin:0 auto}}
 </style>
 </head>
 <body>
@@ -657,6 +663,9 @@ function startNotifListener(uid){
     },
     err=>{
       console.error('Erro no listener de notificações:',err);
+      if(err.code==='permission-denied'){
+        console.warn('⚠️ As regras do Firestore estão bloqueando a coleção "notificacoes". Veja o README para a regra correta.');
+      }
     }
   );
 }
@@ -714,7 +723,17 @@ window.openNotifs=async()=>{
     }).join('');
   }catch(e){
     const list=$('notif-panel-list');
-    if(list)list.innerHTML='<p style="color:#ff6b6b;padding:20px;text-align:center;font-size:13px">Erro ao carregar notificações.</p>';
+    console.error('Erro ao carregar notificações:',e);
+    if(list){
+      if(e.code==='permission-denied'){
+        list.innerHTML=`<div style="padding:16px;text-align:center">
+          <div style="font-size:13px;color:#ff6b6b;margin-bottom:8px">⚠️ Permissão negada pelo Firestore</div>
+          <div style="font-size:11px;color:var(--gray-400);line-height:1.5">As regras de segurança do banco de dados precisam permitir leitura da coleção <strong>notificacoes</strong> para o usuário autenticado. Consulte o README do projeto para a regra correta.</div>
+        </div>`;
+      }else{
+        list.innerHTML='<p style="color:#ff6b6b;padding:20px;text-align:center;font-size:13px">Erro ao carregar notificações.</p>';
+      }
+    }
   }
 };
 
@@ -895,7 +914,7 @@ window.loadBoloes=async()=>{
   c.innerHTML='<div class="ld3"><span></span><span></span><span></span></div>';
   try{
     const allSnap=await getDocs(collection(db,'boloes'));
-    const criados=[],convidados=[],publicos=[],finalizados=[];
+    const criados=[],convidados=[],publicos=[],finalizados=[],pendentesConvite=[];
     const myBolaoIds=new Set();
 
     const autoFinalize=[];
@@ -909,22 +928,27 @@ window.loadBoloes=async()=>{
         v.status='finished';v.aguardandoResultado=true;
       }
       const isCreator=v.creatorId===CU.uid;
-      const isParticipant=(v.invitedEmails||[]).includes(CU.email)||
-        (v.participants||[]).some(p=>p.userId===CU.uid)||
+      // hasAccepted: usuário JÁ ACEITOU o convite (está em participants) ou JÁ FEZ um lance
+      const hasAccepted=(v.participants||[]).some(p=>p.userId===CU.uid)||
         (v.lances||[]).some(l=>l.userId===CU.uid);
+      // wasInvited: foi convidado por e-mail mas ainda NÃO aceitou
+      const wasInvitedNotAccepted=!hasAccepted&&(v.invitedEmails||[]).includes(CU.email);
 
       if(isCreator){
         myBolaoIds.add(v.id);
         if(v.status==='finished'){finalizados.push({...v,_role:'mine'});}
         else{criados.push(v);}
-      } else if(isParticipant){
+      } else if(hasAccepted){
         myBolaoIds.add(v.id);
         if(v.status==='finished'){finalizados.push({...v,_role:'invited'});}
         else{convidados.push(v);}
+      } else if(wasInvitedNotAccepted&&v.status==='open'){
+        // Convite pendente — usuário ainda não aceitou
+        myBolaoIds.add(v.id);
+        pendentesConvite.push(v);
       } else if(v.publico){
         // Public boloes visible to EVERYONE not already in them
         if(v.status==='open'){publicos.push(v);}
-        // If finished and was public, don't show in finalizados unless user participated
       }
     });
 
@@ -939,15 +963,24 @@ window.loadBoloes=async()=>{
       const o={open:0,closed:1,finished:2};
       return o[a.status]!==o[b.status]?o[a.status]-o[b.status]:(b.createdAt?.seconds||0)-(a.createdAt?.seconds||0);
     };
-    criados.sort(sortFn);convidados.sort(sortFn);publicos.sort(sortFn);
+    criados.sort(sortFn);convidados.sort(sortFn);publicos.sort(sortFn);pendentesConvite.sort(sortFn);
     finalizados.sort((a,b)=>(b.createdAt?.seconds||0)-(a.createdAt?.seconds||0));
 
-    if(!criados.length&&!convidados.length&&!publicos.length&&!finalizados.length){
+    if(!criados.length&&!convidados.length&&!publicos.length&&!finalizados.length&&!pendentesConvite.length){
       c.innerHTML=`<div class="empty-state"><span class="empty-icon">⚽</span><p>Nenhum bolão ainda.<br>Crie um ou aguarde um convite!</p></div>`;
       return;
     }
 
     let html='';
+    if(pendentesConvite.length){
+      html+=`<div class="list-section">
+        <div class="list-section-hdr lsh-pending">
+          <span class="lsh-icon">📬</span>
+          <div class="lsh-text"><div class="lsh-title">Convites Pendentes</div><div class="lsh-sub">Aceite para participar destes bolões</div></div>
+          <span class="lsh-count">${pendentesConvite.length}</span>
+        </div>${pendentesConvite.map(b=>renderCard(b,'pending')).join('')}
+      </div>`;
+    }
     if(criados.length){
       html+=`<div class="list-section">
         <div class="list-section-hdr lsh-mine">
@@ -977,11 +1010,13 @@ window.loadBoloes=async()=>{
     }
     if(finalizados.length){
       html+=`<div class="list-section">
-        <div class="list-section-hdr lsh-finished">
+        <button class="list-section-hdr lsh-finished lsh-toggle" onclick="toggleFinalizados()" id="lsh-finalizados-btn">
           <span class="lsh-icon">🏆</span>
           <div class="lsh-text"><div class="lsh-title">Bolões Finalizados</div><div class="lsh-sub">Histórico de bolões encerrados que você participou</div></div>
           <span class="lsh-count">${finalizados.length}</span>
-        </div>${finalizados.map(b=>renderCard(b,b._role||'mine')).join('')}
+          <span class="lsh-arrow" id="lsh-finalizados-arrow">▸</span>
+        </button>
+        <div id="lsh-finalizados-body" style="display:none">${finalizados.map(b=>renderCard(b,b._role||'mine')).join('')}</div>
       </div>`;
     }
     if(!html){
@@ -989,6 +1024,14 @@ window.loadBoloes=async()=>{
     }
     c.innerHTML=html;
   }catch(e){c.innerHTML='<p style="color:#ff6b6b;text-align:center;padding:20px">Erro ao carregar bolões</p>';}
+};
+
+window.toggleFinalizados=()=>{
+  const body=$('lsh-finalizados-body'),arrow=$('lsh-finalizados-arrow');
+  if(!body)return;
+  const open=body.style.display!=='none';
+  body.style.display=open?'none':'block';
+  if(arrow)arrow.textContent=open?'▸':'▾';
 };
 
 async function checkNotificacoes(){
@@ -1155,7 +1198,29 @@ function renderCard(b, context='mine'){
   const lanceRuleBadge=b.lanceUnico?'<span class="rule-badge rule-no">🚫 Lance único</span>':'<span class="rule-badge rule-yes">✅ Lances livres</span>';
 
   // Context-based accent color
-  const accentClass=context==='invited'?'bcard-invited':context==='public'?'bcard-public':'bcard-mine';
+  const accentClass=context==='invited'?'bcard-invited':context==='public'?'bcard-public':context==='pending'?'bcard-pending':'bcard-mine';
+
+  // Convite pendente: card mostra CTA de aceitar/recusar em vez de só abrir
+  if(context==='pending'){
+    return `<div class="bcard ${accentClass}">
+      <div class="bcard-hdr">
+        <span class="bcard-name">${b.name}</span>
+        <div style="display:flex;gap:4px;align-items:center;flex-wrap:wrap;justify-content:flex-end">${statusBadge}${privBadge}</div>
+      </div>
+      <div class="bvs"><span class="bvs-team">${b.team1}</span><span class="bvs-vs">VS</span><span class="bvs-team">${b.team2}</span></div>
+      <div class="bmeta">
+        <span>📅 ${gd.toLocaleDateString('pt-BR')} ${gd.toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'})}</span>
+        <span>💰 R$ ${b.valorLance?.toFixed(2)}</span>
+      </div>
+      <div class="bcard-meta2">
+        <span class="bcard-creator">👑 ${b.creatorName||'—'} convidou você</span>
+      </div>
+      <div style="display:flex;gap:8px;margin-top:8px">
+        <button onclick="event.stopPropagation();aceitarConvitePendente('${b.id}')" style="flex:1;background:linear-gradient(135deg,var(--gold),var(--gold-dark));color:#111;border:none;border-radius:9px;padding:10px;font-size:13px;font-weight:700;cursor:pointer">✅ Aceitar</button>
+        <button onclick="event.stopPropagation();openBolao('${b.id}')" style="flex:1;background:rgba(255,255,255,.06);border:1px solid var(--border);color:var(--white);border-radius:9px;padding:10px;font-size:13px;cursor:pointer">👁️ Ver Detalhes</button>
+      </div>
+    </div>`;
+  }
 
   return `<div class="bcard ${accentClass}" onclick="openBolao('${b.id}')">
     <div class="bcard-hdr">
@@ -1179,6 +1244,14 @@ function renderCard(b, context='mine'){
     </div>
   </div>`;
 }
+
+window.aceitarConvitePendente=async bid=>{
+  ld(1);
+  try{
+    await participar(bid);
+    loadBoloes();
+  }catch(e){toast('Erro ao aceitar convite','e');}finally{ld(0);}
+};
 
 // ── OPEN BOLÃO ────────────────────────────────────────────────────────────────
 window.openBolao=async id=>{
