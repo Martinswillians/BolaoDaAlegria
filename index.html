@@ -931,8 +931,10 @@ window.loadBoloes=async()=>{
       // hasAccepted: usuário JÁ ACEITOU o convite (está em participants) ou JÁ FEZ um lance
       const hasAccepted=(v.participants||[]).some(p=>p.userId===CU.uid)||
         (v.lances||[]).some(l=>l.userId===CU.uid);
-      // wasInvited: foi convidado por e-mail mas ainda NÃO aceitou
-      const wasInvitedNotAccepted=!hasAccepted&&(v.invitedEmails||[]).includes(CU.email);
+      // jaRecusou: usuário já recusou este convite anteriormente
+      const jaRecusou=(v.recusadosEmails||[]).includes(CU.email);
+      // wasInvited: foi convidado por e-mail mas ainda NÃO aceitou nem recusou
+      const wasInvitedNotAccepted=!hasAccepted&&!jaRecusou&&(v.invitedEmails||[]).includes(CU.email);
 
       if(isCreator){
         myBolaoIds.add(v.id);
@@ -1142,29 +1144,40 @@ function showNotifModal(n,docId){
   const old=$('notif-modal-'+docId);if(old)return;
   const m=document.createElement('div');
   m.id='notif-modal-'+docId;
-  m.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.85);z-index:9996;display:flex;align-items:flex-end;justify-content:center';
-  m.innerHTML=`<div style="background:#1a2e1e;border-radius:20px 20px 0 0;padding:22px;width:100%;max-width:500px;border-top:2px solid var(--gold);padding-bottom:max(22px,env(safe-area-inset-bottom))">
-    <div style="font-size:32px;text-align:center;margin-bottom:8px">🎟️</div>
-    <div style="font-family:'Bebas Neue',sans-serif;font-size:22px;color:var(--gold);margin-bottom:6px;text-align:center">Convite para Bolão!</div>
-    <div style="font-size:14px;color:var(--gray-200);margin-bottom:4px;text-align:center"><strong>${n.bolaoName}</strong></div>
-    <div style="font-size:13px;color:var(--gray-400);margin-bottom:4px;text-align:center">${n.team1} × ${n.team2}</div>
-    <div style="font-size:12px;color:var(--gray-400);margin-bottom:16px;text-align:center">Convite de <strong style="color:var(--white)">${n.creatorName}</strong></div>
-    <button onclick="aceitarConviteNotif('${n.bolaoId}','${docId}')"
-      style="width:100%;background:linear-gradient(135deg,var(--gold),var(--gold-dark));color:#111;border:none;border-radius:12px;padding:13px;font-size:15px;font-weight:700;cursor:pointer;margin-bottom:8px;min-height:48px">
-      ✅ Aceitar e Participar do Bolão
-    </button>
-    <button onclick="recusarConviteNotif('${docId}')"
-      style="width:100%;background:none;border:1px solid rgba(229,57,53,.4);border-radius:10px;padding:11px;color:#EF9A9A;cursor:pointer;font-size:13px;min-height:44px">
-      ✕ Recusar Convite
-    </button>
+  m.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:9996;display:flex;align-items:center;justify-content:center;padding:20px';
+  m.innerHTML=`<div style="position:relative;background:#1a2e1e;border-radius:16px;padding:20px;width:100%;max-width:340px;border:1px solid var(--gold);box-shadow:0 10px 40px rgba(0,0,0,.5)">
+    <button onclick="fecharNotifModal('${docId}')" title="Decidir depois"
+      style="position:absolute;top:10px;right:10px;background:rgba(255,255,255,.08);border:none;color:var(--gray-400);width:26px;height:26px;border-radius:50%;cursor:pointer;font-size:14px;line-height:1;display:flex;align-items:center;justify-content:center">✕</button>
+    <div style="font-size:26px;text-align:center;margin-bottom:6px">🎟️</div>
+    <div style="font-family:'Bebas Neue',sans-serif;font-size:18px;color:var(--gold);margin-bottom:4px;text-align:center">Convite para Bolão</div>
+    <div style="font-size:13px;color:var(--gray-200);margin-bottom:2px;text-align:center"><strong>${n.bolaoName}</strong></div>
+    <div style="font-size:12px;color:var(--gray-400);margin-bottom:2px;text-align:center">${n.team1} × ${n.team2}</div>
+    <div style="font-size:11px;color:var(--gray-400);margin-bottom:14px;text-align:center">Convite de <strong style="color:var(--white)">${n.creatorName}</strong></div>
+    <div style="display:flex;gap:8px">
+      <button onclick="recusarConviteNotif('${docId}')"
+        style="flex:1;background:none;border:1px solid rgba(229,57,53,.4);border-radius:9px;padding:10px;color:#EF9A9A;cursor:pointer;font-size:12px;min-height:40px">
+        ✕ Recusar
+      </button>
+      <button onclick="aceitarConviteNotif('${n.bolaoId}','${docId}')"
+        style="flex:1.4;background:linear-gradient(135deg,var(--gold),var(--gold-dark));color:#111;border:none;border-radius:9px;padding:10px;font-size:13px;font-weight:700;cursor:pointer;min-height:40px">
+        ✅ Aceitar
+      </button>
+    </div>
   </div>`;
   document.body.appendChild(m);
 }
+
+window.fecharNotifModal=docId=>{
+  // Apenas fecha visualmente — NÃO marca como lida, para reaparecer depois (sininho continua com badge)
+  const m=$('notif-modal-'+docId);if(m)m.remove();
+};
 
 window.aceitarConviteNotif=async(bolaoId,docId)=>{
   const m=$('notif-modal-'+docId);if(m)m.remove();
   // Adiciona automaticamente à lista de participantes
   await participar(bolaoId);
+  // Marca a notificação como lida (convite resolvido)
+  try{await updateDoc(doc(db,'notificacoes',docId),{lida:true});}catch(e){}
   openBolao(bolaoId);
 };
 
@@ -1172,6 +1185,7 @@ window.recusarConviteNotif=async docId=>{
   const m=$('notif-modal-'+docId);if(m)m.remove();
   try{await updateDoc(doc(db,'notificacoes',docId),{lida:true,recusado:true});}catch(e){}
   toast('Convite recusado.','i');
+  loadBoloes();
 };
 
 window.dispensarNotif=async docId=>{
@@ -1215,9 +1229,10 @@ function renderCard(b, context='mine'){
       <div class="bcard-meta2">
         <span class="bcard-creator">👑 ${b.creatorName||'—'} convidou você</span>
       </div>
-      <div style="display:flex;gap:8px;margin-top:8px">
-        <button onclick="event.stopPropagation();aceitarConvitePendente('${b.id}')" style="flex:1;background:linear-gradient(135deg,var(--gold),var(--gold-dark));color:#111;border:none;border-radius:9px;padding:10px;font-size:13px;font-weight:700;cursor:pointer">✅ Aceitar</button>
-        <button onclick="event.stopPropagation();openBolao('${b.id}')" style="flex:1;background:rgba(255,255,255,.06);border:1px solid var(--border);color:var(--white);border-radius:9px;padding:10px;font-size:13px;cursor:pointer">👁️ Ver Detalhes</button>
+      <div style="display:flex;gap:6px;margin-top:8px">
+        <button onclick="event.stopPropagation();aceitarConvitePendente('${b.id}')" style="flex:1.3;background:linear-gradient(135deg,var(--gold),var(--gold-dark));color:#111;border:none;border-radius:9px;padding:10px 6px;font-size:12px;font-weight:700;cursor:pointer">✅ Aceitar</button>
+        <button onclick="event.stopPropagation();recusarConvitePendente('${b.id}','${b.creatorId}')" style="flex:1;background:none;border:1px solid rgba(229,57,53,.4);color:#EF9A9A;border-radius:9px;padding:10px 4px;font-size:12px;cursor:pointer">✕ Recusar</button>
+        <button onclick="event.stopPropagation();openBolao('${b.id}')" style="flex:1;background:rgba(255,255,255,.06);border:1px solid var(--border);color:var(--white);border-radius:9px;padding:10px 4px;font-size:12px;cursor:pointer">👁️ Ver</button>
       </div>
     </div>`;
   }
@@ -1251,6 +1266,26 @@ window.aceitarConvitePendente=async bid=>{
     await participar(bid);
     loadBoloes();
   }catch(e){toast('Erro ao aceitar convite','e');}finally{ld(0);}
+};
+
+window.recusarConvitePendente=async(bid,creatorId)=>{
+  if(!CU)return;
+  ld(1);
+  try{
+    // Registra a recusa removendo o e-mail do usuário da lista de convidados
+    // e adicionando a um array de recusados (para histórico/transparência)
+    const snap=await getDoc(doc(db,'boloes',bid));
+    if(snap.exists()){
+      const b=snap.data();
+      const invitedEmails=(b.invitedEmails||[]).filter(e=>e!==CU.email);
+      await updateDoc(doc(db,'boloes',bid),{
+        invitedEmails,
+        recusadosEmails:arrayUnion(CU.email)
+      });
+    }
+    toast('Convite recusado.','i');
+    loadBoloes();
+  }catch(e){toast('Erro ao recusar convite','e');}finally{ld(0);}
 };
 
 // ── OPEN BOLÃO ────────────────────────────────────────────────────────────────
