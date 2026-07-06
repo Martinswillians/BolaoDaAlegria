@@ -369,6 +369,22 @@ body{font-family:'Inter',sans-serif;background:var(--dark);color:var(--white);
 .mlcard.conflito{border-left:3px solid var(--danger);background:rgba(229,57,53,.06)}
 .gain-card.gain-pago{border-left-color:var(--green-light);background:rgba(67,160,71,.06)}
 
+/* PRIZE TIMELINE */
+.premio-timeline{margin:10px 0;display:flex;flex-direction:column;gap:0}
+.tl-step{display:flex;align-items:flex-start;gap:10px;padding:6px 0;position:relative}
+.tl-step:not(:last-child):before{content:'';position:absolute;left:12px;top:28px;width:2px;height:calc(100% - 4px);background:rgba(255,255,255,.1)}
+.tl-step.done:not(:last-child):before{background:var(--gold-dark)}
+.tl-dot{width:26px;height:26px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:13px;flex-shrink:0;border:2px solid rgba(255,255,255,.15);background:rgba(255,255,255,.05)}
+.tl-step.done .tl-dot{border-color:var(--gold);background:rgba(255,214,0,.15)}
+.tl-step.pending .tl-dot{color:var(--gray-400)}
+.tl-label{font-size:12px;font-weight:600;color:var(--white);display:flex;flex-direction:column;padding-top:3px}
+.tl-step.pending .tl-label{color:var(--gray-400)}
+.tl-date{font-size:10px;color:var(--gray-400);font-weight:400;margin-top:1px}
+.meu-premio-card{background:rgba(255,214,0,.06);border:1px solid rgba(255,214,0,.2);border-radius:12px;padding:14px;margin:10px 0}
+.meu-premio-card.pago{background:rgba(67,160,71,.08);border-color:rgba(67,160,71,.25)}
+.meu-premio-titulo{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--gold-dark);margin-bottom:4px}
+.meu-premio-valor{font-family:'Bebas Neue';font-size:28px;color:var(--gold);margin-bottom:6px}
+
 /* RESPONSIVE */
 @media(max-width:370px){.vh-team{font-size:20px}.srow{flex-wrap:wrap}.sbox{min-width:calc(50% - 3px)}.igrid{grid-template-columns:1fr}.frow{grid-template-columns:1fr}}
 @media(min-width:600px){.cc{margin-left:auto;margin-right:auto;max-width:560px}.vs-hero,.dhdr,.bolao-meta-strip{max-width:600px;margin:0 auto}.home-body,.create-body,.profile-body{max-width:540px;margin:0 auto}}
@@ -472,6 +488,16 @@ body{font-family:'Inter',sans-serif;background:var(--dark);color:var(--white);
       </div>
     </div>
     <div class="fg">
+      <label>Regra quando ninguém acerta</label>
+      <div class="toggle-option" onclick="toggleAcumula()" id="toggle-acumula">
+        <div class="toggle-icon" id="tacu-icon">☐</div>
+        <div class="toggle-text">
+          <div class="toggle-title">🏦 Acumular para o próximo bolão</div>
+          <div class="toggle-desc"><strong>Ativado:</strong> Se ninguém acertar o placar, o valor total fica acumulado e pode ser transferido para o próximo bolão do grupo.<br><strong>Desativado (padrão):</strong> Se ninguém acertar, os valores pagos são devolvidos aos participantes pelo administrador financeiro.</div>
+        </div>
+      </div>
+    </div>
+    <div class="fg">
       <label>Visibilidade do Bolão</label>
       <div class="toggle-option" onclick="togglePublico()" id="toggle-publico">
         <div class="toggle-icon" id="tpub-icon">☐</div>
@@ -500,7 +526,7 @@ const app=initializeApp({apiKey:"AIzaSyCWmI-VYCTqAKSSOCf2jhjM7CSzJFpyS30",authDo
 const auth=getAuth(app),db=getFirestore(app);
 
 // ── STATE ─────────────────────────────────────────────────────────────────────
-let CU=null,CB=null,unsub=null,UP={},lanceUnicoAtivo=false,publicoAtivo=false;
+let CU=null,CB=null,unsub=null,UP={},lanceUnicoAtivo=false,publicoAtivo=false,acumulaAtivo=false;
 const $=id=>document.getElementById(id);
 
 // ── SAFETY: always clear loading after 8s max ─────────────────────────────────
@@ -531,6 +557,13 @@ window.togglePublico=()=>{
   if(box)box.classList.toggle('active',publicoAtivo);
 };
 
+window.toggleAcumula=()=>{
+  acumulaAtivo=!acumulaAtivo;
+  const icon=$('tacu-icon'),box=$('toggle-acumula');
+  if(icon)icon.textContent=acumulaAtivo?'☑':'☐';
+  if(box)box.classList.toggle('active',acumulaAtivo);
+};
+
 // ── INVITE URL — captura ANTES do auth state ─────────────────────────────────
 const invParam=new URLSearchParams(location.search).get('bolao');
 if(invParam)localStorage.setItem('pendingBolao',invParam);
@@ -552,6 +585,7 @@ onAuthStateChanged(auth,async u=>{
     if(pid){clearPending();showView('detail');setTimeout(()=>openBolao(pid),400);}
     else{showView('home');loadBoloes();}
     startNotifListener(u.uid);
+    registerPushNotifications();
   }else{
     CU=null;UP={};
     const pid=pendingBolao();
@@ -644,17 +678,27 @@ function startNotifListener(uid){
           if(shown.has(d.id))return;
           shown.add(d.id);
           setTimeout(()=>{
-            if(n.tipo==='premio'){showPremioModal(n,d.id);}
+            if(n.tipo==='premio'){
+              showPushNotif('🏆 Você ganhou o bolão!',`${n.bolaoName} — R$ ${n.valor?.toFixed(2)}`,location.href);
+              showPremioModal(n,d.id);
+            }
+            else if(n.tipo==='devolucao'){
+              showPushNotif('↩️ Devolução do bolão',`${n.bolaoName} — R$ ${n.valor?.toFixed(2)} será devolvido`,location.href);
+              toast(`↩️ Devolução: R$ ${n.valor?.toFixed(2)} do bolão "${n.bolaoName}"!`,'s');
+              dispensarNotif(d.id);
+            }
             else if(n.tipo==='pagamento_recebido'){
+              showPushNotif('💰 Prêmio pago!',`Seu prêmio do bolão "${n.bolaoName}" foi transferido!`,location.href);
               toast(`💰 Prêmio do bolão "${n.bolaoName}" foi pago!`,'s');
               dispensarNotif(d.id);
             }
             else if(n.tipo==='alerta_pix'){
+              showPushNotif('⚠️ Cadastre sua chave PIX',`Necessário para receber prêmio do bolão "${n.bolaoName}"`,location.href);
               toast(`⚠️ Cadastre seu PIX para receber o prêmio do bolão "${n.bolaoName}"!`,'e');
               openProfile();dispensarNotif(d.id);
             }
             else{
-              // convite — show as modal
+              showPushNotif('🎟️ Convite para Bolão!',`${n.bolaoName} — ${n.team1} × ${n.team2} por ${n.creatorName}`,location.href);
               showNotifModal(n,d.id);
             }
           },800);
@@ -853,12 +897,18 @@ window.createBolao=async()=>{
     const gameDateTime=new Date(date+'T'+time);
     const emails=emailsRaw?emailsRaw.split(',').map(e=>e.trim()).filter(Boolean):[];
 
+    // Pick up acumulado herdado from previous bolao (criarProximoBolao)
+    const acumuladoHerdado=window._acumuladoHerdado?.valor||0;
+    const bolaoOrigId=window._acumuladoHerdado?.bolaoOrigId||null;
+    window._acumuladoHerdado=null; // reset
+
     const ref=await addDoc(collection(db,'boloes'),{
       name,team1,team2,
       gameDateTime:gameDateTime.toISOString(),
       valorLance:valor,pixKey:pix,
       invitedEmails:emails,
       lanceUnico:lanceUnicoAtivo,
+      acumula:acumulaAtivo,
       publico:publicoAtivo,
       creatorId:CU.uid,
       creatorName:CU.displayName||CU.email,
@@ -867,9 +917,11 @@ window.createBolao=async()=>{
       createdAt:serverTimestamp(),
       status:'open',
       participants:[],lances:[],
-      resultado:null,ganhadores:null,acumulado:0,
-      notificacoesEnviadas:false
-    });
+      resultado:null,ganhadores:null,
+      acumulado:acumuladoHerdado,  // inherited from previous bolao
+      bolaoAnteriorId:bolaoOrigId||null,
+      devolver:false
+
 
     // Notificar usuários convidados que já têm conta
     if(emails.length){
@@ -894,11 +946,13 @@ window.createBolao=async()=>{
     ['b-name','b-team1','b-team2','b-date','b-time','b-valor','b-pix','b-emails'].forEach(id=>{
       const el=$(id);if(el)el.value='';
     });
-    lanceUnicoAtivo=false;publicoAtivo=false;
+    lanceUnicoAtivo=false;publicoAtivo=false;acumulaAtivo=false;
     const icon=$('tli-icon'),box=$('toggle-lance-unico');
     if(icon)icon.textContent='☐';if(box)box.classList.remove('active');
     const icon2=$('tpub-icon'),box2=$('toggle-publico');
     if(icon2)icon2.textContent='☐';if(box2)box2.classList.remove('active');
+    const icon3=$('tacu-icon'),box3=$('toggle-acumula');
+    if(icon3)icon3.textContent='☐';if(box3)box3.classList.remove('active');
     showView('home');
   }catch(e){
     console.error('Erro createBolao:',e);
@@ -1096,25 +1150,27 @@ function showPremioModal(n,docId){
 
 // ── PREMIUM PAYMENT (Admin) ───────────────────────────────────────────────────
 window.uploadCompPremio=async(bid,ganhadorId,input)=>{
-  const file=input.files[0];if(!file)return;
-  if(file.size>5*1024*1024){toast('Arquivo muito grande (máx 5MB)','e');return;}
+  const files=Array.from(input.files);if(!files.length)return;
+  for(const f of files){if(f.size>5*1024*1024){toast(`"${f.name}" muito grande (máx 5MB)`,'e');return;}}
   ld(1);try{
-    const b64=await compressImg(file,800,.65);
+    const b64Array=await Promise.all(files.map(f=>compressImg(f,800,.65)));
     const snap=await getDoc(doc(db,'boloes',bid));
     const b=snap.data();
-    const ganhadores=(b.ganhadores||[]).map(g=>
-      g.userId===ganhadorId?{...g,comprovantePremio:b64,premioPago:true,dataPagamento:new Date().toISOString()}:g
-    );
+    const now=new Date().toISOString();
+    const ganhadores=(b.ganhadores||[]).map(g=>{
+      if(g.userId!==ganhadorId)return g;
+      const existing=Array.isArray(g.comprovantesPremio)?g.comprovantesPremio:g.comprovantePremio?[g.comprovantePremio]:[];
+      const tl=(g.timeline||[]).map(t=>t.status==='transferencia_enviada'?{...t,done:true,ts:t.ts||now}:t);
+      return{...g,comprovantesPremio:[...existing,...b64Array],comprovantePremio:b64Array[0],premioPago:true,dataPagamento:g.dataPagamento||now,timeline:tl};
+    });
     await updateDoc(doc(db,'boloes',bid),{ganhadores});
-    // Notifica ganhador que recebeu
     try{
-      await setDoc(doc(db,'notificacoes',`pgto_${ganhadorId}_${bid}`),{
+      await setDoc(doc(db,'notificacoes',`pgto_${ganhadorId}_${bid}_${Date.now()}`),{
         tipo:'pagamento_recebido',userId:ganhadorId,bolaoId:bid,
-        bolaoName:b.name,adminName:b.adminName||b.creatorName,
-        lida:false,createdAt:serverTimestamp()
+        bolaoName:b.name,adminName:b.adminName||b.creatorName,lida:false,createdAt:serverTimestamp()
       });
     }catch(e){}
-    toast('Comprovante de prêmio enviado! ✅','s');
+    toast(`${files.length} comprovante(s) de prêmio enviado(s)! ✅`,'s');
   }catch(e){toast('Erro: '+e.message,'e');}finally{ld(0);}
 };
 
@@ -1399,7 +1455,12 @@ function renderDetail(b){
     <div class="admin-strip-text"><div class="admin-strip-label">Administrador Financeiro</div><div class="admin-strip-name">${adminName}</div></div>
     ${isCreator?`<button class="btn-gold-outline" onclick="modalAdmin('${b.id}')">Trocar</button>`:''}
   </div>
-  ${b.lanceUnico?`<div style="background:rgba(249,168,37,.1);border:1px solid rgba(249,168,37,.3);border-radius:8px;padding:8px 11px;font-size:12px;color:var(--gold-dark);margin-bottom:9px">🚫 Este bolão <strong>não aceita lances iguais pagos</strong> — cada placar pode ser apostado apenas uma vez.</div>`:''}
+  ${b.lanceUnico?`<div style="background:rgba(249,168,37,.1);border:1px solid rgba(249,168,37,.3);border-radius:8px;padding:8px 11px;font-size:12px;color:var(--gold-dark);margin-bottom:7px">🚫 Lance único por placar — cada placar só pode ser apostado uma vez.</div>`:''}
+  <div style="background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.06);border-radius:8px;padding:8px 11px;font-size:12px;margin-bottom:9px">
+    ${b.acumula===true
+      ?`🏦 <strong style="color:var(--gold)">Bolão Acumulado:</strong> <span style="color:var(--gray-200)">Se ninguém acertar, o valor é transferido para o próximo bolão do grupo.</span>`
+      :`↩️ <strong style="color:#81C784">Devolução:</strong> <span style="color:var(--gray-200)">Se ninguém acertar, os valores pagos são devolvidos a cada participante pelo administrador.</span>`}
+  </div>
   <div class="igrid">
     <div class="icard">💰 Valor por lance<strong>R$ ${b.valorLance?.toFixed(2)}</strong></div>
     <div class="icard">💳 PIX p/ pagamento<strong onclick="cpx('${b.pixKey}')">${b.pixKey} 📋</strong></div>
@@ -1486,8 +1547,9 @@ function renderDetail(b){
     ${!l.comprovante&&!encerrado&&!conflitoAtivo?`
     <div class="pix-rem">PIX: <span class="pk" onclick="cpx('${b.pixKey}')">${b.pixKey} 📋</span> — R$ ${b.valorLance?.toFixed(2)}</div>
     <div class="comp-upload">
-      <input type="file" id="cu-${l.id}" accept="image/*,application/pdf" onchange="uploadComp('${b.id}','${l.id}',this)">
-      <label for="cu-${l.id}" class="btn-upload">📎 Anexar Comprovante (confirma pagamento)</label>
+      <input type="file" id="cu-${l.id}" accept="image/*,application/pdf" multiple onchange="uploadComp('${b.id}','${l.id}',this)">
+      <label for="cu-${l.id}" class="btn-upload">📎 Anexar Comprovante(s) — confirma pagamento</label>
+      <div style="font-size:10px;color:var(--gray-400);margin-top:3px">Você pode selecionar múltiplos arquivos (imagens ou PDF, máx 5MB cada)</div>
     </div>
     ${!l.pago?`<div class="div-or">— ou —</div><button class="btn-sem" onclick="confPag('${b.id}','${l.id}')">Marcar pago sem comprovante</button>`:''}
     `:!l.comprovante&&encerrado?`<div class="enc-aviso">🔒 Apostas encerradas — comprovante não aceito.</div>
@@ -1534,40 +1596,27 @@ function buildAdminInner(b){
       const pix=g.pixRecebimento||pmap[g.userId]?.pixRecebimento||'';
       const semPix=!pix;
       const pago=g.premioPago;
+      const tl=g.timeline||[];
+      const transferSent=tl.find(t=>t.status==='transferencia_enviada')?.done;
+      const confirmed=tl.find(t=>t.status==='confirmado')?.done;
+      const compsPremio=Array.isArray(g.comprovantesPremio)&&g.comprovantesPremio.length?g.comprovantesPremio:g.comprovantePremio?[g.comprovantePremio]:[];
       html+=`<div class="gain-card ${pago?'gain-pago':''}">
         <div class="gain-nome">${g.name}</div>
         <div class="gain-val">R$ ${g.valor?.toFixed(2)}</div>
-        <div style="font-size:11px;color:var(--gray-400);margin-bottom:2px">${g.email}</div>
-        ${semPix?`
-        <div style="background:rgba(229,57,53,.12);border:1px solid rgba(229,57,53,.3);border-radius:8px;padding:8px 10px;margin:6px 0;font-size:12px;color:#EF9A9A">
-          ⚠️ <strong>Chave PIX não cadastrada</strong>
-        </div>
+        <div style="font-size:11px;color:var(--gray-400);margin-bottom:4px">${g.tipo==='devolucao'?'↩️ Devolução':'🏆 Prêmio'} • ${g.email}</div>
+        ${semPix?`<div style="background:rgba(229,57,53,.12);border:1px solid rgba(229,57,53,.3);border-radius:8px;padding:8px 10px;margin:6px 0;font-size:12px;color:#EF9A9A">⚠️ <strong>Chave PIX não cadastrada</strong></div>
         ${viewerIsAdmin?`<div style="display:flex;gap:6px;margin-bottom:8px">
-          <button onclick="enviarAlertaSemPix('${b.id||CB?.id}','${g.userId}','${g.name.replace(/'/g,"\\'")}')"
-            style="flex:1;background:rgba(249,168,37,.15);border:1px solid var(--gold-dark);color:var(--gold-dark);border-radius:8px;padding:7px;font-size:11px;font-weight:600;cursor:pointer">
-            📬 Enviar Alerta
-          </button>
-          <button onclick="verPerfilGanhador('${g.userId}')"
-            style="flex:1;background:rgba(255,255,255,.06);border:1px solid var(--border);color:var(--white);border-radius:8px;padding:7px;font-size:11px;cursor:pointer">
-            👤 Ver Contato
-          </button>
-        </div>`:''}`:`
-        <div class="gain-pix" onclick="cpx('${pix}')">PIX: <strong>${pix} 📋</strong></div>`}
-        ${pago?`
-        <div style="background:rgba(67,160,71,.12);border:1px solid rgba(67,160,71,.3);border-radius:8px;padding:8px;margin-top:6px">
-          <div style="font-size:12px;color:#81C784;font-weight:700">✅ Prêmio pago em ${g.dataPagamento?new Date(g.dataPagamento).toLocaleDateString('pt-BR'):'-'}</div>
-          ${g.comprovantePremio?`<button class="btn-comp-ver" style="margin-top:5px" onclick="verCompPremio('${g.userId}')">📄 Ver Comprovante do Prêmio</button>`:''}
-        </div>`:viewerIsAdmin?`
-        <div style="margin-top:8px;display:flex;flex-direction:column;gap:6px">
-          <div class="comp-upload">
-            <input type="file" id="cp-${g.userId}" accept="image/*,application/pdf" onchange="uploadCompPremio('${b.id||CB?.id}','${g.userId}',this)">
-            <label for="cp-${g.userId}" class="btn-upload" style="font-size:11px">💳 Anexar Comprovante de Pagamento do Prêmio</label>
-          </div>
-          ${!semPix?`<button onclick="marcarPremioPago('${b.id||CB?.id}','${g.userId}')"
-            style="background:var(--green-mid);color:#fff;border:none;border-radius:8px;padding:8px;font-size:12px;font-weight:600;cursor:pointer;width:100%">
-            ✅ Marcar como Pago (sem comprovante)
-          </button>`:''}
-        </div>`:'<div style="font-size:11px;color:var(--gray-400);margin-top:6px">⏳ Aguardando pagamento pelo administrador</div>'}
+          <button onclick="enviarAlertaSemPix('${b.id||CB?.id}','${g.userId}','${g.name.replace(/'/g,"\'")}')" style="flex:1;background:rgba(249,168,37,.15);border:1px solid var(--gold-dark);color:var(--gold-dark);border-radius:8px;padding:7px;font-size:11px;font-weight:600;cursor:pointer">📬 Enviar Alerta</button>
+          <button onclick="verPerfilGanhador('${g.userId}')" style="flex:1;background:rgba(255,255,255,.06);border:1px solid var(--border);color:var(--white);border-radius:8px;padding:7px;font-size:11px;cursor:pointer">👤 Ver Contato</button>
+        </div>`:''}`:
+        `<div class="gain-pix" onclick="cpx('${pix}')">PIX: <strong>${pix} 📋</strong></div>`}
+        ${viewerIsAdmin?`<div style="margin-top:8px;display:flex;flex-direction:column;gap:5px">
+          ${!transferSent?`<div class="comp-upload"><input type="file" id="cp-${g.userId}" accept="image/*,application/pdf" multiple onchange="uploadCompPremio('${b.id||CB?.id}','${g.userId}',this)"><label for="cp-${g.userId}" class="btn-upload" style="font-size:11px">💳 Anexar Comprovante(s) do Prêmio</label></div>
+          <button onclick="marcarTimelineStep('${b.id||CB?.id}','${g.userId}','transferencia_enviada')" style="background:var(--green-mid);color:#fff;border:none;border-radius:8px;padding:8px;font-size:12px;font-weight:600;cursor:pointer;width:100%">✅ Marcar Transferência Enviada</button>`
+          :!confirmed?`<button onclick="marcarTimelineStep('${b.id||CB?.id}','${g.userId}','confirmado')" style="background:rgba(67,160,71,.2);color:#81C784;border:1px solid rgba(67,160,71,.3);border-radius:8px;padding:7px;font-size:12px;cursor:pointer;width:100%">✅ Confirmar Recebimento pelo Ganhador</button>`
+          :'<div style="font-size:11px;color:#81C784">🎉 Processo concluído!</div>'}
+          ${compsPremio.length?`<button class="btn-comp-ver" onclick="verCompPremio('${g.userId}')">📄 Ver Comprovante(s) do Prêmio</button>`:''}
+        </div>`:`${pago?`<div style="font-size:11px;color:#81C784;margin-top:6px">✅ Pago em ${g.dataPagamento?new Date(g.dataPagamento).toLocaleDateString('pt-BR'):'-'}</div>`:'<div style="font-size:11px;color:var(--gray-400);margin-top:6px">⏳ Aguardando admin</div>'}`}
       </div>`;
     });
     html+='</div>';
@@ -1601,6 +1650,7 @@ function buildResultados(b){
   const pagosComp=(b.lances||[]).filter(l=>l.pago&&l.comprovante);
   const pot=pagosComp.length*(b.valorLance||0)+(b.acumulado||0);
   const isAdmin=(b.adminId||b.creatorId)===CU.uid;
+  const isCreator=b.creatorId===CU.uid;
 
   // ── Aguardando resultado (auto-finalizado após 3h) ────────────────────────
   if(b.status==='finished'&&b.aguardandoResultado&&!b.resultado){
@@ -1610,6 +1660,9 @@ function buildResultados(b){
       <div style="font-family:'Bebas Neue';font-size:20px;color:var(--gold-dark);margin-bottom:8px">Aguardando Informação do Placar</div>
       <div style="font-size:13px;color:var(--gray-200);margin-bottom:4px">O jogo já aconteceu. O administrador financeiro ainda não informou o resultado.</div>
       <div style="font-size:12px;color:var(--gray-400);margin-bottom:14px">💰 Total em jogo: <strong style="color:var(--gold)">R$ ${pot.toFixed(2)}</strong></div>
+      <div style="background:rgba(255,255,255,.04);border-radius:8px;padding:8px 12px;font-size:11px;color:var(--gray-400);margin-bottom:14px">
+        ${b.acumula===true?'🏦 Este bolão acumula — se ninguém acertar, o valor vai para o próximo bolão.':'↩️ Este bolão devolve — se ninguém acertar, os valores são devolvidos aos participantes.'}
+      </div>
       ${isAdmin?`
       <div style="background:rgba(249,168,37,.1);border:1px solid rgba(249,168,37,.3);border-radius:10px;padding:12px;margin-bottom:12px;text-align:left">
         <div style="font-size:12px;font-weight:700;color:var(--gold-dark);margin-bottom:8px">📋 Informar placar final agora:</div>
@@ -1633,17 +1686,61 @@ function buildResultados(b){
   // ── Resultado definido ────────────────────────────────────────────────────
   if(b.status==='finished'&&b.resultado){
     const myGain=(b.ganhadores||[]).find(g=>g.userId===CU.uid);
+    const isDevolver=b.devolver&&!b.ganhadores?.some(g=>!g.tipo);
+    const hasWinners=b.ganhadores?.length>0&&!isDevolver;
+
+    // Build timeline HTML for a ganhador
+    const buildTimeline=g=>{
+      const steps=[
+        {key:'resultado_definido',icon:'🏆',label:'Resultado Definido'},
+        {key:'premio_calculado',icon:'💰',label:'Prêmio Calculado'},
+        {key:'transferencia_enviada',icon:'💳',label:'Transferência Enviada'},
+        {key:'confirmado',icon:'✅',label:'Confirmado pelo Ganhador'}
+      ];
+      const tl=g.timeline||[];
+      return `<div class="premio-timeline">
+        ${steps.map((s,i)=>{
+          const step=tl.find(t=>t.status===s.key)||{done:i<2};
+          return `<div class="tl-step ${step.done?'done':'pending'}">
+            <div class="tl-dot">${step.done?s.icon:'○'}</div>
+            <div class="tl-label">${s.label}${step.ts&&step.done?`<span class="tl-date">${new Date(step.ts).toLocaleDateString('pt-BR')}</span>`:''}</div>
+          </div>`;
+        }).join('')}
+      </div>`;
+    };
+
     return makeCC('resfinal','🏆 Resultado Final',`
     <div class="placar-final">${b.team1} <span>${b.resultado.gol1}</span> × <span>${b.resultado.gol2}</span> ${b.team2}</div>
-    ${b.ganhadores?.length?`<div class="ganhou-list">🎉 Ganhadores:${b.ganhadores.map(g=>`<div class="ganhou-chip">${g.name} — R$ ${g.valor?.toFixed(2)}</div>`).join('')}</div>`:`<div class="acumulou">😔 Ninguém acertou! R$ ${pot.toFixed(2)} acumulado.</div>`}
-    ${myGain?`
-    <div style="background:${myGain.premioPago?'rgba(67,160,71,.1)':'rgba(255,214,0,.08)'};border:1px solid ${myGain.premioPago?'rgba(67,160,71,.3)':'rgba(255,214,0,.2)'};border-radius:10px;padding:12px;margin-top:10px">
-      <div style="font-size:13px;font-weight:700;color:${myGain.premioPago?'#81C784':'var(--gold)'}">
-        ${myGain.premioPago?'✅ Seu prêmio foi pago!':'⏳ Aguardando pagamento do prêmio'}
-      </div>
+
+    ${hasWinners?`
+    <div class="ganhou-list">🎉 Ganhadores:${b.ganhadores.map(g=>`<div class="ganhou-chip">${g.name} — R$ ${g.valor?.toFixed(2)}</div>`).join('')}</div>
+    ${myGain&&!myGain.tipo?`
+    <div class="meu-premio-card ${myGain.premioPago?'pago':'pendente'}">
+      <div class="meu-premio-titulo">🏅 Meu Prêmio</div>
+      <div class="meu-premio-valor">R$ ${myGain.valor?.toFixed(2)}</div>
+      ${buildTimeline(myGain)}
       ${myGain.premioPago&&myGain.comprovantePremio?`<button class="btn-comp-ver" style="margin-top:7px" onclick="verCompPremio('${myGain.userId}')">📄 Ver Comprovante do Prêmio</button>`:''}
-      ${!myGain.premioPago?`<div style="font-size:11px;color:var(--gray-400);margin-top:4px">O administrador ${b.adminName} irá transferir R$ ${myGain.valor?.toFixed(2)} para sua chave PIX.</div>`:''}
+      ${!myGain.premioPago?`<div style="font-size:11px;color:var(--gray-400);margin-top:6px">⏳ Aguardando transferência do administrador <strong>${b.adminName}</strong></div>`:''}
+    </div>`:''}`
+    :isDevolver?`
+    <div style="background:rgba(67,160,71,.1);border:1px solid rgba(67,160,71,.25);border-radius:10px;padding:12px;margin-bottom:12px;text-align:center">
+      <div style="font-size:13px;font-weight:700;color:#81C784;margin-bottom:4px">↩️ Ninguém acertou — devolução em andamento</div>
+      <div style="font-size:12px;color:var(--gray-400)">O administrador irá devolver R$ ${(pot/Math.max(pagosComp.length,1)).toFixed(2)} para cada participante.</div>
+      ${b.ganhadores?.map(g=>g.userId===CU.uid?`
+      <div style="margin-top:8px;background:rgba(255,255,255,.05);border-radius:8px;padding:8px">
+        <div style="font-size:12px;color:var(--gray-200)">💰 Você receberá R$ ${g.valor?.toFixed(2)}</div>
+        ${g.premioPago?'<div style="font-size:11px;color:#81C784;margin-top:4px">✅ Devolução realizada!</div>':'<div style="font-size:11px;color:var(--gray-400);margin-top:4px">⏳ Aguardando devolução</div>'}
+      </div>`:'').join('')||''}
+    </div>`
+    :`<div class="acumulou">🏦 Ninguém acertou! R$ ${pot.toFixed(2)} ${b.acumula?'acumulado para o próximo bolão.':'será devolvido aos participantes.'}</div>`}
+
+    ${(isCreator||isAdmin)&&b.acumulado>0?`
+    <div style="background:rgba(255,214,0,.08);border:1px solid rgba(255,214,0,.2);border-radius:10px;padding:12px;margin:8px 0">
+      <div style="font-size:13px;font-weight:700;color:var(--gold);margin-bottom:6px">🏦 Criar Próximo Bolão com Acumulado</div>
+      <div style="font-size:12px;color:var(--gray-200);margin-bottom:8px">R$ ${b.acumulado.toFixed(2)} acumulado está disponível para ser transferido ao próximo bolão.</div>
+      <button onclick="criarProximoBolao('${b.id}')" style="width:100%;background:linear-gradient(135deg,var(--gold),var(--gold-dark));color:#111;border:none;border-radius:9px;padding:10px;font-size:13px;font-weight:700;cursor:pointer">➕ Criar Próximo Bolão com este Acumulado</button>
     </div>`:''}
+
     <div class="sub-title">Placares apostados</div>
     ${pagosComp.map(l=>`<div class="lr">${l.userName}: ${b.team1} ${l.gol1}×${l.gol2} ${b.team2}</div>`).join('')}
     `,true,'cc-res');
@@ -1653,6 +1750,9 @@ function buildResultados(b){
   if(b.status==='closed'){
     return makeCC('fechado','📊 Apostas Encerradas — Aguardando Resultado',`
     <div class="pot-total-str">💰 Total em jogo: R$ ${pot.toFixed(2)}</div>
+    <div style="background:rgba(255,255,255,.04);border-radius:8px;padding:7px 10px;font-size:11px;color:var(--gray-400);margin-bottom:10px">
+      ${b.acumula===true?'🏦 Este bolão acumula — se ninguém acertar, o valor vai para o próximo bolão.':'↩️ Este bolão devolve — se ninguém acertar, os valores são devolvidos aos participantes.'}
+    </div>
     ${isAdmin?`
     <div style="margin-bottom:12px">
       <div class="score-row" style="justify-content:center;margin-bottom:8px">
@@ -1793,42 +1893,39 @@ window.confPag=async(bid,lid)=>{
 };
 
 window.uploadComp=async(bid,lid,input)=>{
-  const file=input.files[0];if(!file)return;
+  const files=Array.from(input.files);if(!files.length)return;
   if(CB){const gd=new Date(CB.gameDateTime),dl=new Date(gd.getTime()-30*60*1000);if(new Date()>=dl||CB.status!=='open'){toast('Apostas encerradas','e');input.value='';return;}}
-  if(file.size>5*1024*1024){toast('Arquivo muito grande (máx 5MB)','e');return;}
 
-  // ── Validação lance único no momento do comprovante (leitura fresca do Firestore) ──
+  // Validate each file
+  for(const file of files){
+    if(file.size>5*1024*1024){toast(`"${file.name}" muito grande (máx 5MB por arquivo)`,'e');input.value='';return;}
+  }
+
+  // Validate lanceUnico conflict before uploading
   const lanceTentando=(CB?.lances||[]).find(l=>l.id===lid);
   if(lanceTentando&&CB?.lanceUnico){
     const conflito=await checkLanceUnicoConflito(bid,lid,lanceTentando.gol1,lanceTentando.gol2);
-    if(conflito){
-      input.value='';
-      showModal({
-        icon:'🚫',
-        title:'Lance bloqueado!',
-        msg:`O placar <strong>${CB.team1} ${lanceTentando.gol1}×${lanceTentando.gol2} ${CB.team2}</strong> já foi confirmado com comprovante por <strong>${conflito.userName}</strong>.<br><br>Este bolão não aceita lances iguais pagos. Você precisa editar seu lance para um placar diferente antes de enviar o comprovante.`,
-        btn:'Entendi — Editar Meu Lance',
-        onOk:()=>editarLance(bid,lid,lanceTentando.gol1,lanceTentando.gol2)
-      });
-      return;
-    }
+    if(conflito){input.value='';showModal({icon:'🚫',title:'Lance bloqueado!',msg:`O placar <strong>${CB.team1} ${lanceTentando.gol1}×${lanceTentando.gol2} ${CB.team2}</strong> já foi confirmado com comprovante por <strong>${conflito.userName}</strong>.<br><br>Edite seu lance para um placar diferente antes de enviar o comprovante.`,btn:'Entendi — Editar Meu Lance',onOk:()=>editarLance(bid,lid,lanceTentando.gol1,lanceTentando.gol2)});return;}
   }
 
   ld(1);try{
-    const b64=await compressImg(file,800,.65);
-    // Re-verify conflict with atomic read before writing
+    // Compress all images and build array
+    const b64Array=await Promise.all(files.map(f=>compressImg(f,800,.65)));
+
+    // Re-verify conflict
     if(lanceTentando&&CB?.lanceUnico){
       const conflito=await checkLanceUnicoConflito(bid,lid,lanceTentando.gol1,lanceTentando.gol2);
-      if(conflito){
-        ld(0);input.value='';
-        toast(`Placar bloqueado! ${conflito.userName} confirmou ${CB.team1} ${lanceTentando.gol1}×${lanceTentando.gol2} ${CB.team2} antes de você. Edite seu lance.`,'e');
-        return;
-      }
+      if(conflito){ld(0);input.value='';toast(`Placar bloqueado! ${conflito.userName} confirmou antes de você.`,'e');return;}
     }
-    const s=await getDoc(doc(db,'boloes',bid));
-    const lances=(s.data().lances||[]).map(l=>l.id===lid?{...l,comprovante:b64,pago:true}:l);
+
+    const snap=await getDoc(doc(db,'boloes',bid));
+    const lances=(snap.data().lances||[]).map(l=>{
+      if(l.id!==lid)return l;
+      const existentes=Array.isArray(l.comprovantes)?l.comprovantes:(l.comprovante?[l.comprovante]:[]);
+      return{...l,comprovantes:[...existentes,...b64Array],comprovante:b64Array[0],pago:true};
+    });
     await updateDoc(doc(db,'boloes',bid),{lances});
-    toast('Comprovante enviado e pagamento confirmado! ✅','s');
+    toast(`${files.length} comprovante(s) enviado(s) ✅`,'s');
   }catch(e){toast('Erro: '+e.message,'e');}finally{ld(0);}
 };
 
@@ -1880,6 +1977,75 @@ window.informarRes=async bid=>{
   const isAdmin=(b.adminId||b.creatorId)===CU.uid;
   if(!isAdmin){toast('Somente o administrador financeiro pode informar o resultado','e');return;}
   const g1=parseInt($('r1')?.value),g2=parseInt($('r2')?.value);
+  if(isNaN(g1)||isNaN(g2)){toast('Informe o placar final','e');return;}
+  ld(1);try{
+    const s=await getDoc(doc(db,'boloes',bid));
+    const bd=s.data();
+    const lances=(bd.lances||[]).filter(l=>l.pago&&l.comprovante);
+    const tot=lances.length*(bd.valorLance||0)+(bd.acumulado||0);
+    const ac=lances.filter(l=>parseInt(l.gol1)===g1&&parseInt(l.gol2)===g2);
+    let ganhadores=[],acumulado=0,devolver=false;
+
+    const timeline=[
+      {status:'resultado_definido',label:'Resultado Definido',ts:new Date().toISOString(),done:true},
+      {status:'premio_calculado',label:'Prêmio Calculado',ts:new Date().toISOString(),done:true},
+      {status:'transferencia_enviada',label:'Transferência Enviada',ts:null,done:false},
+      {status:'confirmado',label:'Confirmado pelo Ganhador',ts:null,done:false}
+    ];
+
+    if(ac.length){
+      const v=tot/ac.length;
+      ganhadores=await Promise.all(ac.map(async l=>{
+        let pix='';
+        try{const us=await getDoc(doc(db,'users',l.userId));pix=us.exists()?us.data().pixRecebimento||'':'';}catch(e){}
+        if(!pix){const part=(bd.participants||[]).find(p=>p.userId===l.userId);pix=part?.pixRecebimento||'';}
+        return{userId:l.userId,name:l.userName,email:l.userEmail,valor:v,
+          pixRecebimento:pix,premioPago:false,comprovantePremio:null,dataPagamento:null,
+          timeline:[...timeline]};
+      }));
+    }else{
+      if(bd.acumula===true){
+        acumulado=tot;
+      }else{
+        // Devolução — calcula valor por participante
+        devolver=true;
+        const valorPorPart=lances.length>0?(tot/lances.length):0;
+        ganhadores=lances.map(l=>({
+          userId:l.userId,name:l.userName,email:l.userEmail,
+          valor:valorPorPart,tipo:'devolucao',
+          pixRecebimento:'',premioPago:false,comprovantePremio:null
+        }));
+      }
+    }
+
+    await updateDoc(doc(db,'boloes',bid),{
+      resultado:{gol1:g1,gol2:g2},
+      ganhadores,acumulado,devolver,
+      status:'finished',
+      aguardandoResultado:false,
+      timelineGlobal:timeline
+    });
+
+    // Notificar ganhadores / participantes para devolução
+    const alvoNotif=devolver?lances:ac;
+    for(const g of alvoNotif){
+      try{
+        await setDoc(doc(db,'notificacoes',`premio_${g.userId}_${bid}_${Date.now()}`),{
+          tipo:devolver?'devolucao':'premio',
+          userId:g.userId,bolaoId:bid,
+          bolaoName:bd.name,team1:bd.team1,team2:bd.team2,
+          valor:devolver?(tot/lances.length):tot/ac.length,
+          adminName:bd.adminName||bd.creatorName,
+          pixCadastrado:true,lida:false,createdAt:serverTimestamp()
+        });
+      }catch(e){}
+    }
+
+    if(ac.length){toast(`🏆 ${ac.length} ganhador(es) definido(s)!`,'s');}
+    else if(devolver){toast('↩️ Ninguém acertou — valor será devolvido aos participantes.','s');}
+    else{toast('🏦 Ninguém acertou — valor acumulado para o próximo bolão!','s');}
+  }catch(e){toast('Erro: '+e.message,'e');}finally{ld(0);}
+};
   if(isNaN(g1)||isNaN(g2)){toast('Informe o placar final','e');return;}
   ld(1);try{
     const s=await getDoc(doc(db,'boloes',bid)),b=s.data();
@@ -2083,12 +2249,57 @@ function lightbox(src,titulo=''){
   lb.innerHTML+=`<button onclick="document.getElementById('lbx').remove()" style="margin-top:14px;background:var(--gold);color:#111;border:none;border-radius:10px;padding:11px 30px;font-size:14px;font-weight:700;cursor:pointer;min-height:44px">✕ Fechar</button>`;
   document.body.appendChild(lb);
 }
-window.verComp=lid=>{const l=(CB?.lances||[]).find(x=>x.id===lid);if(!l?.comprovante){toast('Comprovante não encontrado','e');return;}lightbox(l.comprovante,`${CB.team1} ${l.gol1}×${l.gol2} ${CB.team2}`);};
-window.verCompAdmin=lid=>{const l=(CB?.lances||[]).find(x=>x.id===lid);if(!l?.comprovante){toast('Comprovante não encontrado','e');return;}lightbox(l.comprovante,l.userName);};
+window.verComp=lid=>{
+  const l=(CB?.lances||[]).find(x=>x.id===lid);
+  if(!l){toast('Lance não encontrado','e');return;}
+  const comprovantes=Array.isArray(l.comprovantes)&&l.comprovantes.length?l.comprovantes:l.comprovante?[l.comprovante]:[];
+  if(!comprovantes.length){toast('Comprovante não encontrado','e');return;}
+  if(comprovantes.length===1){
+    lightbox(comprovantes[0],`${CB.team1} ${l.gol1}×${l.gol2} ${CB.team2}`);
+  }else{
+    showComprovanteGallery(comprovantes,`${CB.team1} ${l.gol1}×${l.gol2} ${CB.team2} — ${comprovantes.length} comprovantes`);
+  }
+};
+window.verCompAdmin=lid=>{
+  const l=(CB?.lances||[]).find(x=>x.id===lid);
+  if(!l){toast('Lance não encontrado','e');return;}
+  const comprovantes=Array.isArray(l.comprovantes)&&l.comprovantes.length?l.comprovantes:l.comprovante?[l.comprovante]:[];
+  if(!comprovantes.length){toast('Comprovante não encontrado','e');return;}
+  if(comprovantes.length===1){lightbox(comprovantes[0],l.userName);}
+  else{showComprovanteGallery(comprovantes,`${l.userName} — ${comprovantes.length} comprovantes`);}
+};
+
+function showComprovanteGallery(srcs,titulo=''){
+  const old=$('lightbox-gallery');if(old)old.remove();
+  let idx=0;
+  const lb=document.createElement('div');
+  lb.id='lightbox-gallery';
+  lb.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.96);z-index:9998;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:16px';
+  const render=()=>{
+    const src=srcs[idx];
+    const isPdf=src.startsWith('data:application/pdf');
+    lb.innerHTML=`
+    ${titulo?`<div style="color:var(--gold);font-weight:700;margin-bottom:6px;font-size:13px">${titulo}</div>`:''}
+    <div style="font-size:12px;color:var(--gray-400);margin-bottom:8px">${idx+1} / ${srcs.length}</div>
+    ${isPdf?`<iframe src="${src}" style="width:100%;max-width:500px;height:65vh;border-radius:12px;border:none"></iframe>`
+      :`<img src="${src}" style="max-width:100%;max-height:65vh;border-radius:12px;object-fit:contain">`}
+    <div style="display:flex;gap:10px;margin-top:12px;align-items:center">
+      ${idx>0?`<button onclick="galleryNav(-1)" style="background:rgba(255,255,255,.1);border:none;color:#fff;border-radius:9px;padding:9px 18px;cursor:pointer;font-size:14px">← Anterior</button>`:'<span style="width:90px"></span>'}
+      <button onclick="document.getElementById('lightbox-gallery').remove()" style="background:var(--gold);color:#111;border:none;border-radius:10px;padding:10px 24px;font-size:14px;font-weight:700;cursor:pointer">✕ Fechar</button>
+      ${idx<srcs.length-1?`<button onclick="galleryNav(1)" style="background:rgba(255,255,255,.1);border:none;color:#fff;border-radius:9px;padding:9px 18px;cursor:pointer;font-size:14px">Próximo →</button>`:'<span style="width:90px"></span>'}
+    </div>`;
+    window.galleryNav=(d)=>{idx=Math.max(0,Math.min(srcs.length-1,idx+d));render();};
+  };
+  render();
+  document.body.appendChild(lb);
+}
 window.verCompPremio=userId=>{
   const g=(CB?.ganhadores||[]).find(x=>x.userId===userId);
-  if(!g?.comprovantePremio){toast('Comprovante não encontrado','e');return;}
-  lightbox(g.comprovantePremio,`Prêmio pago — ${g.name}`);
+  if(!g){toast('Ganhador não encontrado','e');return;}
+  const comps=Array.isArray(g.comprovantesPremio)&&g.comprovantesPremio.length?g.comprovantesPremio:g.comprovantePremio?[g.comprovantePremio]:[];
+  if(!comps.length){toast('Comprovante não encontrado','e');return;}
+  if(comps.length===1){lightbox(comps[0],`Prêmio — ${g.name}`);}
+  else{showComprovanteGallery(comps,`Prêmio — ${g.name} (${comps.length} comprovantes)`);}
 };
 window.verPerfilGanhador=async userId=>{
   ld(1);try{
@@ -2110,7 +2321,101 @@ window.verPerfilGanhador=async userId=>{
     document.body.appendChild(m);
   }catch(e){toast('Erro ao buscar perfil','e');}finally{ld(0);}
 };
-// ── COPY ──────────────────────────────────────────────────────────────────────
+// ── CRIAR PRÓXIMO BOLÃO COM ACUMULADO ─────────────────────────────────────────
+window.criarProximoBolao=async(bolaoOrigId)=>{
+  const snap=await getDoc(doc(db,'boloes',bolaoOrigId));
+  if(!snap.exists())return;
+  const b=snap.data();
+  showView('create');
+  // Pre-fill form with same settings after small delay
+  setTimeout(()=>{
+    const nm=$('b-name');if(nm)nm.value=b.name+' (2)';
+    const t1=$('b-team1');if(t1)t1.value=b.team1;
+    const t2=$('b-team2');if(t2)t2.value=b.team2;
+    const pix=$('b-pix');if(pix)pix.value=b.pixKey;
+    const val=$('b-valor');if(val)val.value=b.valorLance;
+    // Set acumula toggle to match original
+    if(b.acumula){acumulaAtivo=true;const i=$('tacu-icon'),bx=$('toggle-acumula');if(i)i.textContent='☑';if(bx)bx.classList.add('active');}
+    // Show acumulado hint
+    toast(`🏦 R$ ${b.acumulado?.toFixed(2)} será herdado como acumulado neste novo bolão.`,'s');
+    // Store reference for createBolao to pick up
+    window._acumuladoHerdado={valor:b.acumulado||0,bolaoOrigId};
+  },300);
+};
+
+// ── ATUALIZAR TIMELINE DO PRÊMIO (Admin) ──────────────────────────────────────
+window.marcarTimelineStep=async(bid,userId,stepKey)=>{
+  ld(1);try{
+    const snap=await getDoc(doc(db,'boloes',bid));
+    const b=snap.data();
+    const now=new Date().toISOString();
+    const ganhadores=(b.ganhadores||[]).map(g=>{
+      if(g.userId!==userId)return g;
+      const tl=(g.timeline||[]).map(t=>t.status===stepKey?{...t,done:true,ts:now}:t);
+      // Auto-mark previous steps as done
+      let found=false;
+      const tlOrdered=tl.map(t=>{if(t.status===stepKey)found=true;return found||t.done?{...t,done:true,ts:t.ts||now}:t;});
+      const pago=stepKey==='transferencia_enviada'||stepKey==='confirmado';
+      return{...g,timeline:tlOrdered,premioPago:pago||g.premioPago,dataPagamento:pago&&!g.dataPagamento?now:g.dataPagamento};
+    });
+    await updateDoc(doc(db,'boloes',bid),{ganhadores});
+    // Notify winner if payment sent
+    if(stepKey==='transferencia_enviada'){
+      const g=ganhadores.find(x=>x.userId===userId);
+      if(g){try{await setDoc(doc(db,'notificacoes',`pgto_${userId}_${bid}_${Date.now()}`),{tipo:'pagamento_recebido',userId,bolaoId:bid,bolaoName:b.name,adminName:b.adminName||b.creatorName,lida:false,createdAt:serverTimestamp()});}catch(e){}}
+    }
+    toast('Timeline atualizada ✅','s');
+  }catch(e){toast('Erro: '+e.message,'e');}finally{ld(0);}
+};
+
+// ── PWA PUSH NOTIFICATION REGISTRATION ────────────────────────────────────────
+async function registerPushNotifications(){
+  if(!('serviceWorker' in navigator)||!('PushManager' in window))return;
+  try{
+    // Register inline service worker for push
+    const swCode=`
+self.addEventListener('push',e=>{
+  const data=e.data?.json()||{};
+  self.registration.showNotification(data.title||'Bolão da Alegria ⚽',{
+    body:data.body||'Você tem uma nova notificação',
+    icon:'https://em-content.zobj.net/source/google/387/soccer-ball_26bd.png',
+    badge:'https://em-content.zobj.net/source/google/387/soccer-ball_26bd.png',
+    tag:data.tag||'bolao-notif',
+    data:{url:data.url||'/'}
+  });
+});
+self.addEventListener('notificationclick',e=>{
+  e.notification.close();
+  e.waitUntil(clients.openWindow(e.notification.data?.url||'/'));
+});`;
+    const blob=new Blob([swCode],{type:'application/javascript'});
+    const swUrl=URL.createObjectURL(blob);
+    const reg=await navigator.serviceWorker.register(swUrl,{scope:'/'}).catch(()=>null);
+    if(!reg)return;
+    const perm=await Notification.requestPermission();
+    if(perm!=='granted'){console.log('Push permission denied');return;}
+    console.log('✅ Push notifications enabled');
+    // Store registration for future use
+    window._swReg=reg;
+  }catch(e){console.log('Push setup skipped:',e.message);}
+}
+
+// ── SHOW LOCAL PUSH NOTIFICATION ─────────────────────────────────────────────
+function showPushNotif(title,body,url=''){
+  if(!('Notification' in window)||Notification.permission!=='granted')return;
+  try{
+    if(window._swReg){
+      window._swReg.showNotification(title,{
+        body,
+        icon:'https://em-content.zobj.net/source/google/387/soccer-ball_26bd.png',
+        tag:'bolao-'+Date.now(),
+        data:{url:url||location.href}
+      });
+    }else{
+      new Notification(title,{body});
+    }
+  }catch(e){}
+}
 window.cpl=link=>navigator.clipboard.writeText(link).then(()=>toast('Link copiado! 📋','s'));
 window.cpx=key=>{if(key&&key!=='—')navigator.clipboard.writeText(key).then(()=>toast('PIX copiado! 📋','s'));};
 
