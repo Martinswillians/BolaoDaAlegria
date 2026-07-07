@@ -918,10 +918,10 @@ window.createBolao=async()=>{
       status:'open',
       participants:[],lances:[],
       resultado:null,ganhadores:null,
-      acumulado:acumuladoHerdado,  // inherited from previous bolao
+      acumulado:acumuladoHerdado,
       bolaoAnteriorId:bolaoOrigId||null,
       devolver:false
-
+    });
 
     // Notificar usuários convidados que já têm conta
     if(emails.length){
@@ -2044,47 +2044,6 @@ window.informarRes=async bid=>{
     if(ac.length){toast(`🏆 ${ac.length} ganhador(es) definido(s)!`,'s');}
     else if(devolver){toast('↩️ Ninguém acertou — valor será devolvido aos participantes.','s');}
     else{toast('🏦 Ninguém acertou — valor acumulado para o próximo bolão!','s');}
-  }catch(e){toast('Erro: '+e.message,'e');}finally{ld(0);}
-};
-  if(isNaN(g1)||isNaN(g2)){toast('Informe o placar final','e');return;}
-  ld(1);try{
-    const s=await getDoc(doc(db,'boloes',bid)),b=s.data();
-    const lances=(b.lances||[]).filter(l=>l.pago&&l.comprovante);
-    const tot=lances.length*(b.valorLance||0)+(b.acumulado||0);
-    const ac=lances.filter(l=>parseInt(l.gol1)===g1&&parseInt(l.gol2)===g2);
-    let ganhadores=[],acumulado=0;
-    if(ac.length){
-      const v=tot/ac.length;
-      // Busca PIX de cada ganhador no perfil
-      const ganhadoresComPix=await Promise.all(ac.map(async l=>{
-        let pix='';
-        try{const us=await getDoc(doc(db,'users',l.userId));pix=us.exists()?us.data().pixRecebimento||'':'';}catch(e){}
-        // Também verifica participants list
-        if(!pix){const part=(b.participants||[]).find(p=>p.userId===l.userId);pix=part?.pixRecebimento||'';}
-        return{userId:l.userId,name:l.userName,email:l.userEmail,valor:v,pixRecebimento:pix,phone:'',premioNotificado:false,premioPago:false,comprovantePremio:null};
-      }));
-      ganhadores=ganhadoresComPix;
-    }else{acumulado=tot;}
-
-    await updateDoc(doc(db,'boloes',bid),{resultado:{gol1:g1,gol2:g2},ganhadores,acumulado,status:'finished'});
-
-    // Notificações para ganhadores
-    for(const g of ganhadores){
-      try{
-        await setDoc(doc(db,'notificacoes',`premio_${g.userId}_${bid}`),{
-          tipo:'premio',userId:g.userId,bolaoId:bid,
-          bolaoName:b.name,team1:b.team1,team2:b.team2,
-          valor:g.valor,creatorName:b.adminName||b.creatorName,
-          pixCadastrado:!!g.pixRecebimento,lida:false,createdAt:serverTimestamp()
-        });
-      }catch(e){}
-    }
-
-    if(ganhadores.length){
-      toast(`🏆 ${ganhadores.length} ganhador(es) definido(s)!`,'s');
-    }else{
-      toast('😔 Ninguém acertou — valor acumulado!','s');
-    }
   }catch(e){toast('Erro: '+e.message,'e');}finally{ld(0);}
 };
 
