@@ -1658,12 +1658,12 @@ function buildResultados(b){
     <div style="text-align:center;padding:8px 0 12px">
       <div style="font-size:40px;margin-bottom:8px">⏳</div>
       <div style="font-family:'Bebas Neue';font-size:20px;color:var(--gold-dark);margin-bottom:8px">Aguardando Informação do Placar</div>
-      <div style="font-size:13px;color:var(--gray-200);margin-bottom:4px">O jogo já aconteceu. O administrador financeiro ainda não informou o resultado.</div>
+      <div style="font-size:13px;color:var(--gray-200);margin-bottom:4px">O jogo já aconteceu. O resultado ainda não foi informado.</div>
       <div style="font-size:12px;color:var(--gray-400);margin-bottom:14px">💰 Total em jogo: <strong style="color:var(--gold)">R$ ${pot.toFixed(2)}</strong></div>
       <div style="background:rgba(255,255,255,.04);border-radius:8px;padding:8px 12px;font-size:11px;color:var(--gray-400);margin-bottom:14px">
         ${b.acumula===true?'🏦 Este bolão acumula — se ninguém acertar, o valor vai para o próximo bolão.':'↩️ Este bolão devolve — se ninguém acertar, os valores são devolvidos aos participantes.'}
       </div>
-      ${isAdmin?`
+      ${(isAdmin||isCreator)?`
       <div style="background:rgba(249,168,37,.1);border:1px solid rgba(249,168,37,.3);border-radius:10px;padding:12px;margin-bottom:12px;text-align:left">
         <div style="font-size:12px;font-weight:700;color:var(--gold-dark);margin-bottom:8px">📋 Informar placar final agora:</div>
         <div class="score-row" style="justify-content:center;margin-bottom:10px">
@@ -1753,7 +1753,7 @@ function buildResultados(b){
     <div style="background:rgba(255,255,255,.04);border-radius:8px;padding:7px 10px;font-size:11px;color:var(--gray-400);margin-bottom:10px">
       ${b.acumula===true?'🏦 Este bolão acumula — se ninguém acertar, o valor vai para o próximo bolão.':'↩️ Este bolão devolve — se ninguém acertar, os valores são devolvidos aos participantes.'}
     </div>
-    ${isAdmin?`
+    ${(isAdmin||isCreator)?`
     <div style="margin-bottom:12px">
       <div class="score-row" style="justify-content:center;margin-bottom:8px">
         <div class="score-team">${b.team1}</div>
@@ -1975,7 +1975,8 @@ window.informarRes=async bid=>{
   const b=CB;
   if(!b){toast('Erro','e');return;}
   const isAdmin=(b.adminId||b.creatorId)===CU.uid;
-  if(!isAdmin){toast('Somente o administrador financeiro pode informar o resultado','e');return;}
+  const isCreatorR=b.creatorId===CU.uid;
+  if(!isAdmin&&!isCreatorR){toast('Somente o criador ou administrador financeiro pode informar o resultado','e');return;}
   const g1=parseInt($('r1')?.value),g2=parseInt($('r2')?.value);
   if(isNaN(g1)||isNaN(g2)){toast('Informe o placar final','e');return;}
   ld(1);try{
