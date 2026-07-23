@@ -335,8 +335,8 @@ body{font-family:'Inter',sans-serif;background:var(--dark);color:var(--white);
 .profile-sheet{background:#1a2e1e;border-radius:20px 20px 0 0;padding:22px;width:100%;max-width:500px;border-top:2px solid var(--gold);max-height:90vh;overflow-y:auto}
 .ps-title{font-family:'Bebas Neue';font-size:22px;color:var(--gold);margin-bottom:4px}
 .ps-sub{font-size:12px;color:var(--gray-400);margin-bottom:16px}
-.ps-avatar{width:56px;height:56px;background:linear-gradient(135deg,var(--gold),var(--gold-dark));border-radius:50%;
-  font-family:'Bebas Neue';font-size:26px;color:var(--dark);display:flex;align-items:center;justify-content:center;margin:0 auto 14px}
+.ps-avatar{width:80px;height:80px;background:linear-gradient(135deg,var(--gold),var(--gold-dark));border-radius:50%;font-family:'Bebas Neue';font-size:34px;color:var(--dark);display:flex;align-items:center;justify-content:center;margin:0 auto;border:3px solid rgba(255,214,0,.3);position:relative;overflow:hidden}
+.ps-avatar:hover #ps-cam-overlay{opacity:1!important}
 
 /* LIST SECTIONS */
 .list-section{margin-bottom:16px}
@@ -441,7 +441,21 @@ body{font-family:'Inter',sans-serif;background:var(--dark);color:var(--white);
 <!-- PROFILE OVERLAY (accessible from any screen) -->
 <div class="profile-overlay" id="profile-overlay" onclick="closeProfile(event)">
   <div class="profile-sheet" id="profile-sheet">
-    <div class="ps-avatar" id="ps-avatar">U</div>
+    <!-- Avatar com upload de foto -->
+    <div style="text-align:center;margin-bottom:16px">
+      <div style="position:relative;display:inline-block">
+        <div class="ps-avatar" id="ps-avatar" onclick="document.getElementById('p-photo-input').click()"
+          style="cursor:pointer;position:relative;overflow:hidden;transition:filter .2s">
+          <span id="ps-avatar-letter">U</span>
+          <img id="ps-avatar-img" src="" alt="" style="display:none;position:absolute;inset:0;width:100%;height:100%;object-fit:cover;border-radius:50%">
+          <div style="position:absolute;inset:0;background:rgba(0,0,0,.45);border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:18px;opacity:0;transition:opacity .2s" id="ps-cam-overlay">📷</div>
+        </div>
+        <div style="position:absolute;bottom:0;right:0;background:var(--gold);border-radius:50%;width:22px;height:22px;display:flex;align-items:center;justify-content:center;font-size:12px;cursor:pointer;box-shadow:0 2px 6px rgba(0,0,0,.4)"
+          onclick="document.getElementById('p-photo-input').click()">📷</div>
+      </div>
+      <input type="file" id="p-photo-input" accept="image/*" style="display:none" onchange="previewFoto(this)">
+      <div style="font-size:11px;color:var(--gray-400);margin-top:6px">Toque na foto para alterar</div>
+    </div>
     <div class="ps-title">👤 Meu Perfil</div>
     <div class="ps-sub">Atualize seus dados e sua chave PIX para receber prêmios.</div>
     <div class="fg"><label>Nome completo</label><input type="text" id="p-name" placeholder="Seu nome"></div>
@@ -453,6 +467,7 @@ body{font-family:'Inter',sans-serif;background:var(--dark);color:var(--white);
       <div class="fhint">Exibida ao administrador financeiro quando você ganhar.</div>
     </div>
     <button class="btn" onclick="saveProfile()" style="margin-bottom:10px">💾 Salvar Perfil</button>
+    <button class="btn-sm" style="width:100%;text-align:center;margin-bottom:8px" onclick="removerFoto()">🗑️ Remover Foto</button>
     <button class="btn-sm" style="width:100%;text-align:center" onclick="closeProfileSheet()">Fechar</button>
   </div>
 </div>
@@ -488,7 +503,13 @@ body{font-family:'Inter',sans-serif;background:var(--dark);color:var(--white);
         <button class="btn-bell" onclick="openNotifs()" id="btn-bell" title="Notificações">
           🔔<span class="bell-badge" id="bell-badge" style="display:none">0</span>
         </button>
-        <button class="btn-profile" onclick="openProfile()">👤 <span id="user-name-top">—</span></button>
+        <button class="btn-profile" onclick="openProfile()" id="btn-profile-btn">
+          <span id="btn-profile-avatar" style="display:flex;align-items:center;gap:6px">
+            <span id="btn-profile-icon" style="font-size:14px">👤</span>
+            <img id="btn-profile-img" src="" alt="" style="display:none;width:22px;height:22px;border-radius:50%;object-fit:cover;border:1.5px solid var(--gold)">
+            <span id="user-name-top">—</span>
+          </span>
+        </button>
         <button class="btn-logout" onclick="logoutUser()">Sair</button>
       </div>
     </div>
@@ -500,7 +521,12 @@ body{font-family:'Inter',sans-serif;background:var(--dark);color:var(--white);
   <nav class="bnav">
     <button class="bnav-btn on" onclick="showView('home')"><span class="ic">🏠</span>Início</button>
     <button class="bnav-btn" onclick="showView('create')"><span class="ic">➕</span>Criar</button>
-    <button class="bnav-btn" onclick="openProfile()"><span class="ic">👤</span>Perfil</button>
+    <button class="bnav-btn" onclick="openProfile()">
+      <span class="ic" id="bnav-profile-ic">
+        <span id="bnav-profile-emoji" style="font-size:19px">👤</span>
+        <img id="bnav-profile-img" src="" alt="" style="display:none;width:24px;height:24px;border-radius:50%;object-fit:cover;border:1.5px solid var(--gold)">
+      </span>Perfil
+    </button>
     <button class="bnav-btn" onclick="loadBoloes()"><span class="ic">🔄</span>Atualizar</button>
   </nav>
 </div>
@@ -625,6 +651,8 @@ onAuthStateChanged(auth,async u=>{
     CU=u;
     try{const s=await getDoc(doc(db,'users',u.uid));UP=s.exists()?s.data():{}}catch(e){UP={};}
     const el=$('user-name-top');if(el)el.textContent=u.displayName||u.email.split('@')[0];
+    // Show profile photo in top bar if available (loaded after UP is set)
+    setTimeout(updateTopBarAvatar,100);
     const pid=pendingBolao();
     if(pid){clearPending();showView('detail');setTimeout(()=>openBolao(pid),400);}
     else{showView('home');loadBoloes();}
@@ -861,16 +889,63 @@ window.showTab=t=>{
 window.openProfile=async()=>{
   if(!CU)return;
   try{const s=await getDoc(doc(db,'users',CU.uid));UP=s.exists()?s.data():{}}catch(e){}
-  const av=$('ps-avatar');if(av)av.textContent=(CU.displayName||'U')[0].toUpperCase();
+  // Set avatar — photo or initial letter
+  const letter=(CU.displayName||'U')[0].toUpperCase();
+  const avLetter=$('ps-avatar-letter');if(avLetter)avLetter.textContent=letter;
+  const avImg=$('ps-avatar-img');
+  if(UP.fotoPerfil&&avImg){
+    avImg.src=UP.fotoPerfil;avImg.style.display='block';
+    const avLt=$('ps-avatar-letter');if(avLt)avLt.style.display='none';
+  }else if(avImg){
+    avImg.style.display='none';
+    const avLt=$('ps-avatar-letter');if(avLt)avLt.style.display='flex';
+  }
+  // Hide remove button if no photo
+  const rmBtn=document.querySelector('.btn-sm[onclick="removerFoto()"]');
+  if(rmBtn)rmBtn.style.display=UP.fotoPerfil?'block':'none';
   const pn=$('p-name');if(pn)pn.value=UP.name||CU.displayName||'';
   const pe=$('p-email');if(pe)pe.value=CU.email;
   const pp=$('p-phone');if(pp)pp.value=UP.phone||'';
   const px=$('p-pix');if(px)px.value=UP.pixRecebimento||'';
+  // Clear any pending photo preview
+  window._pendingPhoto=null;
+  const inp=$('p-photo-input');if(inp)inp.value='';
   const ov=$('profile-overlay');if(ov)ov.classList.add('on');
 };
 
 window.closeProfileSheet=()=>{const ov=$('profile-overlay');if(ov)ov.classList.remove('on');};
 window.closeProfile=e=>{if(e.target===$('profile-overlay'))closeProfileSheet();};
+
+// Preview photo before saving
+window.previewFoto=async(input)=>{
+  const file=input.files[0];if(!file)return;
+  if(file.size>5*1024*1024){toast('Foto muito grande (máx 5MB)','e');return;}
+  try{
+    // Compress to max 400px for profile photo
+    const b64=await compressImg(file,400,.80);
+    window._pendingPhoto=b64;
+    // Show preview
+    const avImg=$('ps-avatar-img');
+    const avLetter=$('ps-avatar-letter');
+    if(avImg){avImg.src=b64;avImg.style.display='block';}
+    if(avLetter)avLetter.style.display='none';
+    const rmBtn=document.querySelector('.btn-sm[onclick="removerFoto()"]');
+    if(rmBtn)rmBtn.style.display='block';
+    toast('Foto selecionada! Clique em Salvar para confirmar.','s');
+  }catch(e){toast('Erro ao processar imagem','e');}
+};
+
+// Remove photo
+window.removerFoto=async()=>{
+  window._pendingPhoto='REMOVE';
+  const avImg=$('ps-avatar-img');
+  const avLetter=$('ps-avatar-letter');
+  if(avImg){avImg.src='';avImg.style.display='none';}
+  if(avLetter){avLetter.textContent=(CU.displayName||'U')[0].toUpperCase();avLetter.style.display='flex';}
+  const rmBtn=document.querySelector('.btn-sm[onclick="removerFoto()"]');
+  if(rmBtn)rmBtn.style.display='none';
+  toast('Foto removida. Clique em Salvar para confirmar.','i');
+};
 
 window.saveProfile=async()=>{
   const name=($('p-name').value||'').trim();
@@ -878,13 +953,53 @@ window.saveProfile=async()=>{
   const pix=($('p-pix').value||'').trim();
   if(!name){toast('Informe seu nome','e');return;}
   ld(1);try{
+    // Handle photo
+    let fotoUpdate={};
+    if(window._pendingPhoto==='REMOVE'){
+      fotoUpdate={fotoPerfil:null};
+      UP.fotoPerfil=null;
+    }else if(window._pendingPhoto){
+      fotoUpdate={fotoPerfil:window._pendingPhoto};
+      UP.fotoPerfil=window._pendingPhoto;
+    }
+    window._pendingPhoto=null;
     await updateProfile(CU,{displayName:name});
-    await setDoc(doc(db,'users',CU.uid),{name,email:CU.email,phone,pixRecebimento:pix,updatedAt:serverTimestamp()},{merge:true});
+    await setDoc(doc(db,'users',CU.uid),{name,email:CU.email,phone,pixRecebimento:pix,...fotoUpdate,updatedAt:serverTimestamp()},{merge:true});
     UP={...UP,name,phone,pixRecebimento:pix};
-    const el=$('user-name-top');if(el)el.textContent=name;
+    // Update top bar avatar
+    updateTopBarAvatar();
     toast('Perfil salvo! ✅','s');closeProfileSheet();
-  }catch(e){toast('Erro ao salvar','e');}finally{ld(0);}
+  }catch(e){toast('Erro ao salvar: '+e.message,'e');}finally{ld(0);}
 };
+
+function updateTopBarAvatar(){
+  const name=CU?.displayName||CU?.email?.split('@')[0]||'—';
+  const el=$('user-name-top');if(el)el.textContent=name;
+  const photo=UP?.fotoPerfil||null;
+
+  // Top bar button
+  const topImg=$('btn-profile-img');
+  const topIcon=$('btn-profile-icon');
+  if(photo){
+    if(topImg){topImg.src=photo;topImg.style.display='inline-block';}
+    if(topIcon)topIcon.style.display='none';
+  }else{
+    if(topImg)topImg.style.display='none';
+    if(topIcon)topIcon.style.display='inline-block';
+  }
+
+  // Bottom nav button
+  const bnavImg=$('bnav-profile-img');
+  const bnavEmoji=$('bnav-profile-emoji');
+  if(photo){
+    if(bnavImg){bnavImg.src=photo;bnavImg.style.display='inline-block';}
+    if(bnavEmoji)bnavEmoji.style.display='none';
+  }else{
+    if(bnavImg)bnavImg.style.display='none';
+    if(bnavEmoji)bnavEmoji.style.display='inline-block';
+  }
+}
+
 
 // ── COLLAPSIBLE ───────────────────────────────────────────────────────────────
 window.toggleCC=id=>{
